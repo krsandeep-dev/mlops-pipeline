@@ -1,0 +1,5 @@
+# Runtime dependencies for environments without uv.
+# pyproject.toml and uv.lock are the source of truth for exact transitive resolution;
+# use `uv sync` where possible.
+mlflow==3.15.1
+boto3==1.43.73
