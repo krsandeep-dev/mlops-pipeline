@@ -1,7 +1,7 @@
 [project]
 name = "mlops-pipeline"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "boto3>=1.43.73",
     "mlflow==3.15.1",

@@ -80,12 +80,18 @@ flowchart TB
 
 ## Quickstart (local)
 
-Prerequisites: Docker Desktop, [uv](https://github.com/astral-sh/uv).
+Prerequisites: Docker Desktop, conda, [uv](https://github.com/astral-sh/uv).
+
+Python lives in the conda env `mlops-pipeline` (3.10); uv resolves and installs the
+locked dependency set into it rather than creating a project `.venv`.
 
 ```bash
+conda activate mlops-pipeline
+UV_PROJECT_ENVIRONMENT=$CONDA_PREFIX uv sync
+
 cp .env.example .env        # set local passwords
 docker compose up -d --build
-uv run python scripts/smoke_mlflow.py
+python scripts/smoke_mlflow.py
 ```
 
 UIs: MLflow at http://localhost:5001 · MinIO console at http://localhost:9001
