@@ -85,9 +85,19 @@ Prerequisites: Docker Desktop, conda, [uv](https://github.com/astral-sh/uv).
 Python lives in the conda env `mlops-pipeline` (3.10); uv resolves and installs the
 locked dependency set into it rather than creating a project `.venv`.
 
+One-time, so uv targets the conda env instead of creating its own:
+
+```bash
+conda create -n mlops-pipeline python=3.10
+conda env config vars set UV_PROJECT_ENVIRONMENT="$(conda run -n mlops-pipeline \
+  python -c 'import sys; print(sys.prefix)')" -n mlops-pipeline
+```
+
+Then:
+
 ```bash
 conda activate mlops-pipeline
-UV_PROJECT_ENVIRONMENT=$CONDA_PREFIX uv sync
+uv sync                     # installs into the conda env
 
 cp .env.example .env        # set local passwords
 docker compose up -d --build
