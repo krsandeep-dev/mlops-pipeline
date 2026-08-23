@@ -1,0 +1,10 @@
+# Development tooling on top of the runtime set.
+#   pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+iniconfig==2.3.0
+pluggy==1.6.0
+pygments==2.21.0
+pytest==9.1.1
+ruff==0.16.3

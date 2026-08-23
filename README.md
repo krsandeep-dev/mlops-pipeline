@@ -104,29 +104,26 @@ ECR repository, and one S3 bucket.
 
 ## Quickstart (local)
 
-Prerequisites: Docker Desktop, conda, [uv](https://github.com/astral-sh/uv).
+Prerequisites: Docker Desktop, conda.
 For the optional AWS layer: Terraform ≥ 1.11 and the AWS CLI.
 
-Python lives in the conda env `mlops-pipeline` (3.10); uv resolves and installs the
-locked dependency set into it rather than creating a project `.venv`.
-
-One-time, so uv targets the conda env instead of creating its own:
-
-```bash
-conda create -n mlops-pipeline python=3.10
-conda env config vars set UV_PROJECT_ENVIRONMENT="$(conda run -n mlops-pipeline \
-  python -c 'import sys; print(sys.prefix)')" -n mlops-pipeline
-```
-
-Then:
+Python lives in the conda env `mlops-pipeline` (3.10), described by `environment.yml`.
+`requirements.txt` pins every transitive dependency, so an install is reproducible
+without a lockfile.
 
 ```bash
+conda env create -f environment.yml
 conda activate mlops-pipeline
-uv sync                     # installs into the conda env
 
 cp .env.example .env        # set local passwords
 docker compose up -d --build
 python scripts/smoke_mlflow.py
+```
+
+To update an existing env after the requirements change:
+
+```bash
+pip install -r requirements-dev.txt
 ```
 
 UIs: MLflow at http://localhost:5001 · MinIO console at http://localhost:9001
