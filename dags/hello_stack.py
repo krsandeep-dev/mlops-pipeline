@@ -1,13 +1,13 @@
 """Smoke-test DAG: proves Airflow can reach the MLflow tracking server."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from airflow.sdk import dag, task
 
 
 @dag(
     dag_id="hello_stack",
-    start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    start_date=datetime(2026, 1, 1, tzinfo=UTC),
     schedule=None,
     catchup=False,
     tags=["smoke"],
