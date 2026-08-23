@@ -23,6 +23,9 @@ x-airflow-common: &airflow-common
     - ./config:/opt/airflow/config
     - ./plugins:/opt/airflow/plugins
     - ./src:/opt/airflow/src
+    - ./.dvc:/opt/airflow/repo/.dvc
+    - ./.git:/opt/airflow/repo/.git:ro
+    - ./data:/opt/airflow/repo/data:ro
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     postgres:
@@ -75,7 +78,7 @@ services:
     entrypoint: >
       /bin/sh -c "
       mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
-      mc mb --ignore-existing local/mlflow-artifacts local/dvc-data
+      mc mb --ignore-existing local/mlflow-artifacts local/dvc-data local/landing
       "
 
   mlflow:

@@ -1,3 +1,9 @@
 mlflow==3.15.1
 boto3==1.43.56
 dvc[s3]==3.67.1
+
+# Filtered from Airflow's constraints (they conflict with mlflow's ceilings);
+# re-pinned here by hand. Keep in sync with uv.lock.
+pandas==2.3.3
+cryptography==49.0.0
+pyarrow==25.0.0
