@@ -7,3 +7,8 @@ mlruns/
 *.tfstate*
 docs/learning/
 .DS_Store
+logs/
+plugins/*
+config/simple_auth_manager_passwords.json
+!config/.gitkeep
+!plugins/.gitkeep
