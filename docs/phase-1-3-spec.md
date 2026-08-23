@@ -47,6 +47,62 @@ Two Airflow 3 changes drive this design:
 
 ---
 
+## Part 0b — Required fix to the 1.2 MLflow service (do this first)
+
+MLflow 3.5.0 and later ship security middleware that validates the HTTP `Host` header to
+block DNS rebinding attacks. When the server binds to `0.0.0.0`, only a default allowlist
+of localhost-style hosts is accepted. Your browser hitting `localhost:5001` passes; the
+Airflow container calling `http://mlflow:5000` sends `Host: mlflow:5000`, which is not on
+that list, and the request is rejected with *"Invalid Host header - possible DNS rebinding
+attack detected"*.
+
+This is a genuine security control, not a bug — the correct fix is to allow the specific
+host, not to disable the middleware.
+
+### `docker-compose.yml`, `mlflow` service — before
+
+```yaml
+    command: >
+      mlflow server
+      --backend-store-uri postgresql+psycopg2://${MLFLOW_DB_USER}:${MLFLOW_DB_PASSWORD}@postgres:5432/mlflow
+      --artifacts-destination s3://mlflow-artifacts
+      --host 0.0.0.0
+      --port 5000
+```
+
+### After
+
+```yaml
+    command: >
+      mlflow server
+      --backend-store-uri postgresql+psycopg2://${MLFLOW_DB_USER}:${MLFLOW_DB_PASSWORD}@postgres:5432/mlflow
+      --artifacts-destination s3://mlflow-artifacts
+      --host 0.0.0.0
+      --port 5000
+      --allowed-hosts "localhost,localhost:*,127.0.0.1,127.0.0.1:*,mlflow,mlflow:*"
+```
+
+Then `docker compose up -d mlflow` and re-run `scripts/smoke_mlflow.py` to confirm the
+browser path still works before moving on.
+
+Three things to understand:
+
+- **`--allowed-hosts` replaces the defaults, it does not extend them.** Drop the localhost
+  entries and your browser at `:5001` breaks instead.
+- **Both `mlflow` and `mlflow:*` are listed on purpose.** The matcher compares the raw
+  `Host` header, including the port, against each pattern without stripping it — an entry
+  of just `mlflow` will not match `mlflow:5000`. This has caused real confusion in
+  Kubernetes deployments where a service DNS name arrives with a port attached.
+- **There is a `--disable-security-middleware` style escape hatch. Don't use it.** Turning
+  off a security control to make a container talk to another container is exactly the
+  reflex the Teaching-mode rule about root causes exists to prevent. The equivalent
+  production answer is a reverse proxy terminating TLS with an explicit allowlist, which
+  belongs in the README's production gaps.
+- These options only work with MLflow's default FastAPI/uvicorn server — they are ignored
+  under `--gunicorn-opts` or `--waitress-opts`.
+
+---
+
 ## Part 1 — Change: `.env.example` and `.env`
 
 Airflow needs two secrets, plus your host UID so container-written files aren't owned by
@@ -382,6 +438,7 @@ trigger it, and open the task log.
 
 | Symptom | Cause and fix |
 | --- | --- |
+| Task fails with "Invalid Host header" | `--allowed-hosts` missing or incomplete on the mlflow service — see Part 0b. |
 | dag-processor unhealthy or SIGKILLed | api-server not up. `docker compose logs airflow-apiserver` first, always. |
 | Task fails with a 401/403 | `AIRFLOW_JWT_SECRET` differs between components — check the anchor is actually merged into all four. |
 | DAG missing from the UI | Import error. `docker compose logs airflow-dag-processor` shows the traceback. |
