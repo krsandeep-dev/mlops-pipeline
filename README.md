@@ -65,6 +65,12 @@ flowchart TB
   credentials — the server brokers all artifact traffic.
 - **Lightweight model on purpose.** Fast training keeps the feedback loop on the
   pipeline, where the engineering value is.
+- **DVC for versioning, not orchestration.** DVC's pipeline feature (`dvc repro`) overlaps
+  with Airflow; running both would mean two dependency graphs over the same steps. DVC
+  versions data and artifacts, Airflow orchestrates, MLflow records outcomes.
+- **NYC Yellow Taxi data.** Chosen over Census or Credit Default because it has a real time
+  axis: drift in Phase 5 comes from replaying later months, not from synthetically
+  corrupting inputs.
 
 ## Cloud footprint and cost
 
@@ -94,7 +100,7 @@ ECR repository, and one S3 bucket.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
-| 1 | Local infra: Compose stack (MinIO, Postgres, MLflow, Airflow), Terraform, DVC, ingestion DAG | 🔨 in progress — Compose stack and AWS foundation done |
+| 1 | Local infra: Compose stack (MinIO, Postgres, MLflow, Airflow), Terraform, DVC, ingestion DAG | 🔨 in progress — Compose stack, AWS foundation, and DVC-tracked dataset done |
 | 2 | Preprocess/train DAGs, MLflow tracking, model registry | planned |
 | 3 | FastAPI serving on k3d, multi-stage Docker build, tests | planned |
 | 4 | CI/CD with GitHub Actions | planned |
@@ -104,26 +110,20 @@ ECR repository, and one S3 bucket.
 
 ## Quickstart (local)
 
-Prerequisites: Docker Desktop, conda.
+Prerequisites: Docker Desktop, [uv](https://github.com/astral-sh/uv).
 For the optional AWS layer: Terraform ≥ 1.11 and the AWS CLI.
 
-Python lives in the conda env `mlops-pipeline` (3.10), described by `environment.yml`.
-`requirements.txt` pins every transitive dependency, so an install is reproducible
-without a lockfile.
+`uv sync` builds the environment from `uv.lock`, an exact pinned resolution, and
+fetches Python 3.11 if it is missing. Every project command runs through `uv run`,
+so local and CI resolve to identical packages.
 
 ```bash
-conda env create -f environment.yml
-conda activate mlops-pipeline
+uv sync
 
 cp .env.example .env        # set local passwords
 docker compose up -d --build
-python scripts/smoke_mlflow.py
-```
-
-To update an existing env after the requirements change:
-
-```bash
-pip install -r requirements-dev.txt
+uv run python scripts/smoke_mlflow.py
+uv run dvc pull             # fetch the dataset (MinIO by default, `-r aws` for S3)
 ```
 
 UIs: MLflow at http://localhost:5001 · MinIO console at http://localhost:9001
@@ -132,6 +132,7 @@ UIs: MLflow at http://localhost:5001 · MinIO console at http://localhost:9001
 
 ```
 ├── dags/                # Airflow DAGs
+├── data/                # DVC-tracked datasets (pointers in git, bytes in the remote)
 ├── src/mlops_pipeline/  # shared Python package
 ├── docker/              # service images and init scripts
 ├── infra/terraform/     # AWS resources (S3, ECR, IAM)
