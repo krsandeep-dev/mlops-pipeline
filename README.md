@@ -66,11 +66,35 @@ flowchart TB
 - **Lightweight model on purpose.** Fast training keeps the feedback loop on the
   pipeline, where the engineering value is.
 
+## Cloud footprint and cost
+
+The AWS layer is deliberately minimal and fully described in `infra/terraform/`:
+
+| Resource | Purpose | Cost when idle |
+| --- | --- | --- |
+| S3 bucket | DVC remote | ~$0.02/GB-month, lifecycle rules cap growth |
+| ECR repository | Inference API images | ~$0.10/GB-month, last 10 images retained |
+| GitHub OIDC provider + IAM role | Keyless CI authentication | free |
+
+No always-on compute is provisioned. The ECS Fargate demo in Phase 6 is applied and
+destroyed in a single session.
+
+Everything runs locally without an AWS account: MinIO stands in for S3, and k3d for
+managed Kubernetes.
+
+```bash
+cd infra/terraform && terraform init && terraform plan
+```
+
+**Security posture:** CI authenticates via GitHub OIDC — no long-lived AWS keys exist
+anywhere in the repo or in GitHub secrets. The IAM role is scoped to one repository, one
+ECR repository, and one S3 bucket.
+
 ## Roadmap
 
 | Phase | Scope | Status |
 | --- | --- | --- |
-| 1 | Local infra: Compose stack (MinIO, Postgres, MLflow, Airflow), Terraform, DVC, ingestion DAG | 🔨 in progress |
+| 1 | Local infra: Compose stack (MinIO, Postgres, MLflow, Airflow), Terraform, DVC, ingestion DAG | 🔨 in progress — Compose stack and AWS foundation done |
 | 2 | Preprocess/train DAGs, MLflow tracking, model registry | planned |
 | 3 | FastAPI serving on k3d, multi-stage Docker build, tests | planned |
 | 4 | CI/CD with GitHub Actions | planned |
@@ -81,6 +105,7 @@ flowchart TB
 ## Quickstart (local)
 
 Prerequisites: Docker Desktop, conda, [uv](https://github.com/astral-sh/uv).
+For the optional AWS layer: Terraform ≥ 1.11 and the AWS CLI.
 
 Python lives in the conda env `mlops-pipeline` (3.10); uv resolves and installs the
 locked dependency set into it rather than creating a project `.venv`.
@@ -131,3 +156,9 @@ Each gap is tracked and closed (or documented) in Phase 6:
 - Images: `latest` tags locally → digest-pinned images in production.
 - State: single-node Postgres and MinIO → managed RDS and S3 with backups and
   lifecycle policies.
+- Terraform state is local; production uses an S3 backend with native locking
+  (`use_lockfile = true`), one state file per environment.
+- Bucket encryption is SSE-S3; regulated workloads use customer-managed KMS keys for
+  rotation, per-key policies, and CloudTrail on key usage.
+- The CI role trusts any ref in the repository; tightening the `sub` condition to
+  `refs/heads/main` blocks fork-PR access.
