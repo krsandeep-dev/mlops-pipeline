@@ -6,3 +6,6 @@
 ['remote "aws"']
     url = s3://mlops-pipeline-data-b9ee5951/dvc
     region = eu-north-1
+['remote "minio-docker"']
+    url = s3://dvc-data
+    endpointurl = http://minio:9000
