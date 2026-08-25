@@ -7,10 +7,19 @@ dependencies = [
     # window, and a high boto3 floor forces the resolver off modern DVC.
     "boto3>=1.34",
     "dvc[s3]>=3.60",
+    "lightgbm>=4.7.0",
     "mlflow==3.15.1",
     "pandas==2.3.3",
     "pyarrow==25.0.0",
+    "scikit-learn>=1.9.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mlops_pipeline"]
 
 [dependency-groups]
 dev = [
