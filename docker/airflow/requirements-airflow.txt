@@ -7,3 +7,9 @@ dvc[s3]==3.67.1
 pandas==2.3.3
 cryptography==49.0.0
 pyarrow==25.0.0
+
+# Training runs in-network from 2.3 (the host cannot resolve presigned artifact
+# URLs, which are minted with the internal minio hostname). scikit-learn and
+# narwhals are already pinned by the 3.11 constraints at the versions uv.lock
+# holds, so only lightgbm needs an explicit pin.
+lightgbm==4.7.0

@@ -23,6 +23,15 @@ ARG AIRFLOW_VERSION=3.3.1
 ARG PYTHON_VERSION=3.11
 ARG CONSTRAINTS="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
 
+# LightGBM links the GNU OpenMP runtime dynamically and the slim base does not ship
+# it, so importing lightgbm fails with "libgomp.so.1: cannot open shared object file".
+# The macOS equivalent is `brew install libomp`; neither platform's wheel bundles it.
+USER root
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+USER airflow
+
 COPY requirements-airflow.txt /tmp/requirements-airflow.txt
 RUN curl -sSL "${CONSTRAINTS}" -o /tmp/constraints-airflow.txt \
     && grep -viE '^(cryptography|pandas)==' /tmp/constraints-airflow.txt > /tmp/constraints-filtered.txt \

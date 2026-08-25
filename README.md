@@ -122,8 +122,9 @@ ECR repository, and one S3 bucket.
 
 Prerequisites: Docker Desktop, [uv](https://github.com/astral-sh/uv).
 For the optional AWS layer: Terraform ≥ 1.11 and the AWS CLI.
-On macOS also `brew install libomp` — LightGBM's wheel links OpenMP dynamically and
-macOS does not ship it. Linux wheels bundle it, so this is host-only.
+On macOS also `brew install libomp` — LightGBM links the OpenMP runtime dynamically
+and does not bundle it. The Airflow image installs the Linux equivalent (`libgomp1`)
+for the same reason.
 
 `uv sync` builds the environment from `uv.lock`, an exact pinned resolution, and
 fetches Python 3.11 if it is missing. Every project command runs through `uv run`,
