@@ -71,6 +71,11 @@ flowchart TB
 - **NYC Yellow Taxi data.** Chosen over Census or Credit Default because it has a real time
   axis: drift in Phase 5 comes from replaying later months, not from synthetically
   corrupting inputs.
+- **Airflow resolves pinned data, it does not pull it.** Tasks use `dvc.api.get_url` to
+  turn a committed `.dvc` pointer into an object URL and stream the parquet directly from
+  storage — no second copy, no container-side cache, and the orchestrator never writes to
+  the repository. A separate `minio-docker` remote exists solely because the same object
+  store has a different address inside the Compose network.
 
 ## Cloud footprint and cost
 
@@ -100,8 +105,8 @@ ECR repository, and one S3 bucket.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
-| 1 | Local infra: Compose stack (MinIO, Postgres, MLflow, Airflow), Terraform, DVC, ingestion DAG | 🔨 in progress — Compose stack, AWS foundation, and DVC-tracked dataset done |
-| 2 | Preprocess/train DAGs, MLflow tracking, model registry | planned |
+| 1 | Local infra: Compose stack (MinIO, Postgres, MLflow, Airflow), Terraform, DVC, ingestion DAG | ✅ complete |
+| 2 | Preprocess/train DAGs, MLflow tracking, model registry | 🔨 in progress |
 | 3 | FastAPI serving on k3d, multi-stage Docker build, tests | planned |
 | 4 | CI/CD with GitHub Actions | planned |
 | 5 | Drift detection + automated retraining loop | planned |
