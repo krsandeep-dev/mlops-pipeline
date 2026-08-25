@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 
 import lightgbm as lgb
 import mlflow
@@ -58,14 +59,31 @@ def evaluate(y_true: pd.Series, y_pred: np.ndarray) -> dict[str, float]:
     }
 
 
-def main() -> None:
+@dataclass(frozen=True)
+class TrainingResult:
+    run_id: str
+    model_uri: str
+    metrics: dict[str, float]
+    baseline_metrics: dict[str, float]
+    data_url: str
+
+
+def load_splits() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Reference sample, split temporally. Shared by training and the promotion gate."""
+    reference = pd.read_parquet(REFERENCE_URI, storage_options=storage_options())
+    return temporal_split(reference)
+
+
+def configure_tracking() -> None:
     mlflow.set_tracking_uri(
         os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5001")
     )
     mlflow.set_experiment(EXPERIMENT_NAME)
 
-    reference = pd.read_parquet(REFERENCE_URI, storage_options=storage_options())
-    train_df, valid_df = temporal_split(reference)
+
+def main() -> TrainingResult:
+    configure_tracking()
+    train_df, valid_df = load_splits()
     x_train, y_train, prep = build_features(train_df)
     x_valid, y_valid, _ = build_features(valid_df)
 
@@ -114,18 +132,27 @@ def main() -> None:
             }
         )
         mlflow.log_metrics({**metrics, "train_seconds": train_seconds})
-        mlflow.lightgbm.log_model(
+        model_info = mlflow.lightgbm.log_model(
             model,
             name="model",
             signature=infer_signature(x_valid, prediction),
             input_example=x_valid.head(5),
         )
+        print(f"logged model: {model_info.model_uri}")
 
         print(
             f"lightgbm MAE: {metrics['mae']:.3f} min "
             f"(baseline {baseline_metrics['mae']:.3f}), trained in {train_seconds:.1f}s"
         )
 
+        return TrainingResult(
+            run_id=mlflow.active_run().info.run_id,
+            model_uri=model_info.model_uri,
+            metrics=metrics,
+            baseline_metrics=baseline_metrics,
+            data_url=data_url,
+        )
+
 
 if __name__ == "__main__":
-    main()
+    print(main())
