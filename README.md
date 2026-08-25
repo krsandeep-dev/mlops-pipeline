@@ -76,6 +76,11 @@ flowchart TB
   storage — no second copy, no container-side cache, and the orchestrator never writes to
   the repository. A separate `minio-docker` remote exists solely because the same object
   store has a different address inside the Compose network.
+- **The model excludes `trip_distance`.** It is the metered distance, known only after the
+  trip, so using it to predict trip duration is leakage: a strong validation score with no
+  deployment path. Features are restricted to what is known when a ride is requested, and a
+  unit test enforces the exclusion list on every commit. Validation uses a temporal split
+  for the same reason — production always means predicting forward.
 
 ## Cloud footprint and cost
 
