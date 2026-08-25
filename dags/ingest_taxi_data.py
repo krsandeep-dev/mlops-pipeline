@@ -54,10 +54,16 @@ def ingest_taxi_data():
     def write_reference_sample(url: str, _validation: dict) -> str:
         import pandas as pd
 
-        from mlops_pipeline.data import build_reference_sample
+        from mlops_pipeline.data import build_reference_sample, clean_raw
 
         df = pd.read_parquet(url, storage_options=_storage_options())
-        sample = build_reference_sample(df)
+        cleaned, cleaning = clean_raw(df)
+        print(
+            f"cleaning: dropped {cleaning.dropped_non_positive_duration} of "
+            f"{cleaning.input_rows} rows ({cleaning.drop_fraction:.4%}) for "
+            f"non-positive duration"
+        )
+        sample = build_reference_sample(cleaned)
         sample.to_parquet(
             LANDING_URI, index=False, storage_options=_storage_options()
         )

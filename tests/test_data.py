@@ -4,6 +4,7 @@ import pytest
 from mlops_pipeline.data import (
     DataValidationError,
     build_reference_sample,
+    clean_raw,
     validate_raw,
 )
 
@@ -35,13 +36,23 @@ def test_validate_raw_rejects_missing_columns():
         validate_raw(df)
 
 
-def test_validate_raw_rejects_reversed_timestamps():
+def test_clean_raw_drops_non_positive_durations():
     df = _frame()
     df.loc[0, "tpep_dropoff_datetime"] = df.loc[0, "tpep_pickup_datetime"] - pd.Timedelta(
         minutes=5
     )
-    with pytest.raises(DataValidationError, match="ending before"):
-        validate_raw(df)
+    df.loc[1, "tpep_dropoff_datetime"] = df.loc[1, "tpep_pickup_datetime"]
+    cleaned, report = clean_raw(df)
+    assert report.dropped_non_positive_duration == 2
+    assert report.output_rows == len(df) - 2
+    assert (cleaned["trip_duration_min"] > 0).all()
+
+
+def test_clean_raw_fails_above_threshold():
+    df = _frame(1_000)
+    df["tpep_dropoff_datetime"] = df["tpep_pickup_datetime"]
+    with pytest.raises(DataValidationError, match="above the"):
+        clean_raw(df)
 
 
 def test_reference_sample_is_deterministic():
