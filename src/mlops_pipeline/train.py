@@ -81,6 +81,25 @@ def configure_tracking() -> None:
     mlflow.set_experiment(EXPERIMENT_NAME)
 
 
+def verify_pyfunc_round_trip(
+    model_uri: str, x_sample: pd.DataFrame, expected: np.ndarray
+) -> None:
+    """Fail training if the logged model cannot be served.
+
+    The promotion gate and Phase 3's FastAPI service both load through pyfunc, and
+    neither can switch loaders. A model that only works via the flavor-specific
+    loader is unservable, so catch it at log time rather than at promotion time.
+    """
+    actual = mlflow.pyfunc.load_model(model_uri).predict(x_sample)
+    actual = np.asarray(actual, dtype=float)
+    if actual.shape != expected.shape or not np.allclose(actual, expected, atol=1e-9):
+        raise RuntimeError(
+            f"pyfunc round-trip mismatch for {model_uri}: predictions differ from the "
+            f"in-memory model (max abs diff "
+            f"{np.abs(actual - expected).max() if actual.shape == expected.shape else 'shape mismatch'})"
+        )
+
+
 def main() -> TrainingResult:
     configure_tracking()
     train_df, valid_df = load_splits()
@@ -139,6 +158,12 @@ def main() -> TrainingResult:
             input_example=x_valid.head(5),
         )
         print(f"logged model: {model_info.model_uri}")
+
+        sample = x_valid.head(256)
+        verify_pyfunc_round_trip(
+            model_info.model_uri, sample, np.asarray(model.predict(sample), dtype=float)
+        )
+        print(f"pyfunc round-trip verified on {len(sample)} rows")
 
         print(
             f"lightgbm MAE: {metrics['mae']:.3f} min "

@@ -23,6 +23,14 @@ FEATURE_COLUMNS = (
     "passenger_count",
 )
 
+# Declared to LightGBM at fit time via `categorical_feature`, NOT cast to pandas
+# `category` dtype. A category column makes infer_signature record the field as
+# `long` while the booster stores a pandas_categorical mapping and demands the
+# category dtype back at predict time -- so the logged signature describes a frame
+# the model cannot consume, and pyfunc (the path serving uses) fails both ways:
+# category input is rejected by signature enforcement, and an int cast is rejected
+# by LightGBM. Integer columns plus a fit-time declaration keep the categorical
+# splits and make both loaders agree.
 CATEGORICAL_COLUMNS = (
     "pickup_hour",
     "pickup_weekday",
@@ -94,8 +102,6 @@ def build_features(
     frame["passenger_count"] = frame["passenger_count"].fillna(1).astype("int16")
 
     features = frame[list(FEATURE_COLUMNS)].copy()
-    for column in CATEGORICAL_COLUMNS:
-        features[column] = features[column].astype("category")
 
     params = PreprocessingParams(
         min_duration_min=min_duration_min,
