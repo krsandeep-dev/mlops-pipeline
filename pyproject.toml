@@ -23,11 +23,16 @@ packages = ["src/mlops_pipeline"]
 
 [dependency-groups]
 dev = [
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "prometheus-fastapi-instrumentator>=8.1.0",
+    "pydantic-settings>=2.15.0",
     "pytest>=9.1.1",
     "ruff>=0.16.3",
+    "uvicorn>=0.52.3",
 ]
 
 [tool.pytest.ini_options]
 # Mirrors PYTHONPATH=/opt/airflow/src in the Airflow containers, so the package
 # imports the same way on the host without being installed.
-pythonpath = ["src"]
+pythonpath = ["src", "."]
