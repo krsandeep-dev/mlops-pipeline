@@ -81,6 +81,17 @@ flowchart TB
   deployment path. Features are restricted to what is known when a ride is requested, and a
   unit test enforces the exclusion list on every commit. Validation uses a temporal split
   for the same reason — production always means predicting forward.
+- **Serving joins the cluster to the Compose network, because the signature says so.**
+  MLflow 3 does not proxy artifact bytes: it redirects to a presigned
+  `http://minio:9000/...` URL signed with `X-Amz-SignedHeaders=host`, so the Host header
+  is inside the SigV4 signature and no ingress or port remap can rewrite it. Any client
+  must reach a host literally named `minio` on port 9000, which is why the k3d cluster
+  attaches to `mlops-pipeline_default` rather than talking to published host ports.
+- **The artifact path is bounded, because its failure mode is a stall, not an error.**
+  MLflow's presigned download passes `timeout=None` and retries five times per file, so a
+  misconfigured network hangs silently — ten minutes and zero bytes, measured. Serving caps
+  each read with a socket timeout and the whole load with a hard wall-clock ceiling, so a
+  bad network fails a readiness probe in seconds instead of hanging a rollout.
 - **Retraining is a DAG with a threshold, and rejection is success.** The pipeline
   registers every candidate, re-scores the live champion on the candidate's validation
   rows, and moves the `@champion` alias only on a ≥1% MAE improvement. A run that
@@ -128,8 +139,9 @@ ECR repository, and one S3 bucket.
 Prerequisites: Docker Desktop, [uv](https://github.com/astral-sh/uv).
 For the optional AWS layer: Terraform ≥ 1.11 and the AWS CLI.
 On macOS also `brew install libomp` — LightGBM links the OpenMP runtime dynamically
-and does not bundle it. The Airflow image installs the Linux equivalent (`libgomp1`)
-for the same reason.
+and does not bundle it. The Airflow and serving images install the Linux equivalent
+(`libgomp1`) for the same reason.
+For Phase 3 serving: `brew install k3d helm` (kubectl is assumed).
 
 `uv sync` builds the environment from `uv.lock`, an exact pinned resolution, and
 fetches Python 3.11 if it is missing. Every project command runs through `uv run`,
@@ -146,6 +158,19 @@ uv run dvc pull             # fetch the dataset (MinIO by default, `-r aws` for 
 
 UIs: MLflow at http://localhost:5001 · MinIO console at http://localhost:9001 ·
 Airflow at http://localhost:8080
+
+### Serving (Phase 3, in progress)
+
+`make help` lists the targets. M1 (app on the Compose network) and M2 (cluster + egress
+proven from an in-cluster pod) are green; M3/M4 are next.
+
+```bash
+make image           # multi-stage build, tagged with the short git SHA
+make m1-up m1-verify # run on the Compose network, assert the HTTP contract
+make m1-down
+make cluster-up      # k3d cluster from the committed k3d/cluster.yaml
+make m2-verify       # in-cluster pod: tracking API + a real artifact download
+```
 
 ### Trigger the training DAG over the REST API
 
@@ -202,3 +227,12 @@ Each gap is tracked and closed (or documented) in Phase 6:
   `refs/heads/main` blocks fork-PR access.
 - Alerting: a failed DAG run only turns red in a UI nobody watches → wire
   `on_failure_callback` to Slack/PagerDuty and define per-task SLAs.
+- Serving's in-cluster DNS leans on Docker Desktop's resolver: CoreDNS runs with
+  `dnsPolicy: Default` and forwards Compose service names upstream to the node's resolver.
+  On Linux Docker that resolver is the network-local `127.0.0.11`, which a CoreDNS *pod*
+  cannot reach — so a Linux CI runner needs the documented CoreDNS `NodeHosts` fallback
+  (mechanism A′ in `docs/phase-3-serving-spec.md`). Production replaces the whole question
+  with a real object-store endpoint and DNS.
+- The serving image is ~1.4 GB, dominated by mlflow + scipy + scikit-learn pulled in by the
+  model's logged requirements. Production trims this with `mlflow-skinny` plus only the
+  flavor's runtime, or a purpose-built model server.
