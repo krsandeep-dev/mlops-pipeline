@@ -81,6 +81,11 @@ flowchart TB
   deployment path. Features are restricted to what is known when a ride is requested, and a
   unit test enforces the exclusion list on every commit. Validation uses a temporal split
   for the same reason — production always means predicting forward.
+- **Retraining is a DAG with a threshold, and rejection is success.** The pipeline
+  registers every candidate, re-scores the live champion on the candidate's validation
+  rows, and moves the `@champion` alias only on a ≥1% MAE improvement. A run that
+  correctly declines to promote ends green — failure is reserved for the pipeline actually
+  breaking. Registry-mutating tasks never retry automatically.
 
 ## Cloud footprint and cost
 
@@ -111,8 +116,8 @@ ECR repository, and one S3 bucket.
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | Local infra: Compose stack (MinIO, Postgres, MLflow, Airflow), Terraform, DVC, ingestion DAG | ✅ complete |
-| 2 | Preprocess/train DAGs, MLflow tracking, model registry | 🔨 in progress |
-| 3 | FastAPI serving on k3d, multi-stage Docker build, tests | planned |
+| 2 | Preprocess/train DAGs, MLflow tracking, model registry | ✅ complete |
+| 3 | FastAPI serving on k3d, multi-stage Docker build, tests | 🔨 in progress |
 | 4 | CI/CD with GitHub Actions | planned |
 | 5 | Drift detection + automated retraining loop | planned |
 | 6 | Hardening: secrets, IAM, security checklist, cost audit | planned |
@@ -139,7 +144,29 @@ uv run python scripts/smoke_mlflow.py
 uv run dvc pull             # fetch the dataset (MinIO by default, `-r aws` for S3)
 ```
 
-UIs: MLflow at http://localhost:5001 · MinIO console at http://localhost:9001
+UIs: MLflow at http://localhost:5001 · MinIO console at http://localhost:9001 ·
+Airflow at http://localhost:8080
+
+### Trigger the training DAG over the REST API
+
+This is the exact mechanism Phase 5's drift loop will use: mint a JWT from the auth
+endpoint, POST a run. The simple auth manager regenerates the admin password on every
+api-server start and the file lives inside the container, so fetch it there:
+
+```bash
+PASS=$(docker compose exec -T airflow-apiserver python -c \
+  "import json; print(json.load(open('/opt/airflow/simple_auth_manager_passwords.json.generated'))['admin'])")
+
+TOKEN=$(curl -s -X POST http://localhost:8080/auth/token \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\": \"admin\", \"password\": \"$PASS\"}" \
+  | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+
+curl -s -X POST http://localhost:8080/api/v2/dags/train_and_promote/dagRuns \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"logical_date": null}'
+```
 
 ## Repository layout
 
@@ -173,3 +200,5 @@ Each gap is tracked and closed (or documented) in Phase 6:
   rotation, per-key policies, and CloudTrail on key usage.
 - The CI role trusts any ref in the repository; tightening the `sub` condition to
   `refs/heads/main` blocks fork-PR access.
+- Alerting: a failed DAG run only turns red in a UI nobody watches → wire
+  `on_failure_callback` to Slack/PagerDuty and define per-task SLAs.
