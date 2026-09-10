@@ -1,0 +1,12 @@
+# URIs only. There is deliberately no Secret: MLflow 3 answers artifact requests with a
+# presigned URL whose SigV4 signature is in the query string, so the pod never builds an
+# S3 request and never needs credentials. Proven by loading the model with deliberately
+# wrong AWS_* values and a bogus MLFLOW_S3_ENDPOINT_URL -- it succeeded in 1.53s.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-serving
+  namespace: serving
+data:
+  MLFLOW_TRACKING_URI: "http://mlflow:5000"
+  MODEL_URI: "models:/taxi-trip-duration@champion"
