@@ -27,7 +27,8 @@ TAG         ?= $(if $(STAMPED_TAG),$(STAMPED_TAG),$(GIT_SHA))
 .PHONY: help lint test image require-image m1-up m1-verify m1-down \
         cluster-up cluster-start cluster-stop cluster-down cluster-info \
         coredns-refresh m2-dns m2-verify image-import signature-check \
-        m3-deploy m3-verify m3-down
+        m3-deploy m3-verify m3-down \
+        helm-lint helm-template helm-install helm-uninstall
 
 help:  ## List targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -168,3 +169,27 @@ m3-verify:  ## M3: assert the contract through the Traefik ingress from the host
 
 m3-down:  ## M3: remove the deployed manifests
 	-kubectl delete -k k8s/
+
+# ---------------------------------------------------------------- M4 / Helm
+
+RELEASE ?= model-serving
+CHART   := charts/model-serving
+
+helm-lint:  ## Lint the chart
+	helm lint $(CHART) --set image.tag=$(TAG)
+
+helm-template:  ## Render the chart as it would be installed
+	helm template $(RELEASE) $(CHART) --namespace $(NAMESPACE) --set image.tag=$(TAG)
+
+# The tag is passed, never defaulted. .image-tag is written by `make image`, so the
+# release always carries the image that was actually built and verified here; the chart
+# refuses to render without it rather than falling back to something plausible.
+helm-install: require-image image-import  ## Install/upgrade the release from the stamped tag
+	helm upgrade --install $(RELEASE) $(CHART) \
+	  --namespace $(NAMESPACE) --create-namespace \
+	  --set image.tag=$(TAG) \
+	  --wait --timeout 5m
+	kubectl -n $(NAMESPACE) get pods -o wide
+
+helm-uninstall:  ## Remove the release
+	-helm uninstall $(RELEASE) --namespace $(NAMESPACE)

@@ -167,9 +167,15 @@ Airflow at http://localhost:8080
 
 ### Serving (Phase 3, in progress)
 
+Promotion is verified by `/model`'s `run_id` following the `@champion` alias, not by
+prediction values changing: v1 and v4 are numerically identical models (deterministic
+training over the same pinned data), so identical predictions after a flip are the correct
+result. A prediction-visible promotion needs Phase 5's drift data.
+
 `make help` lists the targets. M1 (app on the Compose network), M2 (cluster + egress
 proven from an in-cluster pod) and M3 (raw manifests, prediction served through the
-Traefik ingress at http://mlops-serving.localhost:8081) are green; M4 is next. Image-consuming targets default
+Traefik ingress at http://mlops-serving.localhost:8081) and M4 (promotion demo, then the
+same deployment as a Helm chart) are green. Phase 3 is complete. Image-consuming targets default
 to the tag `make image` last stamped, so they keep working after a commit moves `HEAD`;
 pass `TAG=<tag>` to override.
 
@@ -182,6 +188,8 @@ make cluster-start   # restart a stopped cluster (cluster-stop to park it)
 make m2-verify       # in-cluster pod: tracking API + a real artifact download
 make m3-deploy       # raw manifests via kustomize, wait for the rollout
 make m3-verify       # assert the contract through the Traefik ingress from the host
+make helm-install    # the same deployment as a chart; tag supplied from .image-tag
+make helm-uninstall
 ```
 
 ### Trigger the training DAG over the REST API
@@ -252,6 +260,11 @@ Each gap is tracked and closed (or documented) in Phase 6:
   (measured: `NXDOMAIN` even for `kubernetes.default`). `make cluster-up` and
   `make cluster-start` therefore restart CoreDNS and wait for it every time; the step is
   idempotent and costs a few seconds.
+- `replicas: 1` means `maxUnavailable` computes to 0, so a ready pod always exists across
+  a rollout — but Traefik still returns a handful of 502s at cutover while endpoint
+  removal propagates. Measured over three rollouts: 2–3 failed requests each, ~0.5% of
+  samples polled at 200 ms. The fix is `replicas: 2` plus a `preStop` sleep so the
+  terminating pod keeps serving until it leaves rotation; deferred to Phase 4.
 - The serving pod runs non-root with all capabilities dropped, but
   `readOnlyRootFilesystem` is off: MLflow downloads the model into a cache under `$HOME`
   at startup. Closing it needs `emptyDir` mounts for `$HOME` and `/tmp`.
