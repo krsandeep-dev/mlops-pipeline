@@ -87,6 +87,18 @@ flowchart TB
   is inside the SigV4 signature and no ingress or port remap can rewrite it. Any client
   must reach a host literally named `minio` on port 9000, which is why the k3d cluster
   attaches to `mlops-pipeline_default` rather than talking to published host ports.
+- **CI declares intent; it does not deploy.** The pipeline lints, tests, builds a
+  multi-arch image, pushes it to GHCR, and then commits the new tag to the chart's
+  `values.yaml`. Nothing in CI can reach the cluster — a hosted runner has no route to a
+  laptop, and the alternatives (a tunnel, an exposed API server, a self-hosted runner
+  holding cluster credentials) are all worse than the gap. `helm upgrade` runs locally
+  against the committed value until Phase 7, when ArgoCD reads the same value and the
+  pipeline does not change at all. The gap is the argument for GitOps, not an obstacle.
+- **ECR gets a copy, never a rebuild.** A release tag copies the exact `linux/amd64`
+  manifest already in GHCR, by digest, into ECR. Rebuilding at tag time would ship
+  different bits from the ones verified on the cluster — same source, different base-image
+  patch level. The tag names a commit whose `values.yaml` already points at a released
+  image, so cutting a release means tagging the bump commit.
 - **Serving holds no credentials, because the presigned URL is the credential.** The pod
   gets a ConfigMap with two URIs and no Secret: MLflow answers artifact requests with a
   presigned URL whose SigV4 signature travels in the query string, so the client never
@@ -134,8 +146,8 @@ ECR repository, and one S3 bucket.
 | --- | --- | --- |
 | 1 | Local infra: Compose stack (MinIO, Postgres, MLflow, Airflow), Terraform, DVC, ingestion DAG | ✅ complete |
 | 2 | Preprocess/train DAGs, MLflow tracking, model registry | ✅ complete |
-| 3 | FastAPI serving on k3d, multi-stage Docker build, tests | 🔨 in progress |
-| 4 | CI/CD with GitHub Actions | planned |
+| 3 | FastAPI serving on k3d, multi-stage Docker build, tests | ✅ complete |
+| 4 | CI/CD with GitHub Actions | 🔨 in progress |
 | 5 | Drift detection + automated retraining loop | planned |
 | 6 | Hardening: secrets, IAM, security checklist, cost audit | planned |
 | 7 | ArgoCD GitOps | planned |
@@ -165,12 +177,17 @@ uv run dvc pull             # fetch the dataset (MinIO by default, `-r aws` for 
 UIs: MLflow at http://localhost:5001 · MinIO console at http://localhost:9001 ·
 Airflow at http://localhost:8080
 
-### Serving (Phase 3, in progress)
+### Serving (Phase 3, complete)
 
 Promotion is verified by `/model`'s `run_id` following the `@champion` alias, not by
 prediction values changing: v1 and v4 are numerically identical models (deterministic
 training over the same pinned data), so identical predictions after a flip are the correct
 result. A prediction-visible promotion needs Phase 5's drift data.
+
+The Helm chart is the only definition of the deployment. The raw Kubernetes manifests
+that preceded it were deleted once the chart reproduced them; they are in git history at
+`459c389` (`k8s/`) if you want to compare the two forms. Keeping both would have
+guaranteed drift the moment ArgoCD started syncing the chart.
 
 `make help` lists the targets. M1 (app on the Compose network), M2 (cluster + egress
 proven from an in-cluster pod) and M3 (raw manifests, prediction served through the
@@ -260,6 +277,14 @@ Each gap is tracked and closed (or documented) in Phase 6:
   (measured: `NXDOMAIN` even for `kubernetes.default`). `make cluster-up` and
   `make cluster-start` therefore restart CoreDNS and wait for it every time; the step is
   idempotent and costs a few seconds.
+- `main` is unprotected and CI pushes the tag bump to it directly. Deliberate for a
+  solo repository: it keeps the handoff fully automatic and matches how every phase has
+  landed. The alternative is a bot-opened PR (the pattern Argo Image Updater uses), which
+  is stronger on a team repo but stops the pipeline until a human merges.
+- Image signing and SBOM generation are absent; Trivy runs as a report, not a gate. A
+  blocking vulnerability gate on a 1.4 GB scientific-Python image fails on transitive CVEs
+  nobody in this repo can fix. Production signs images (cosign) and publishes an SBOM.
+- DAG integrity tests (do the DAG files parse) need an Airflow runtime and are not in CI.
 - `replicas: 1` means `maxUnavailable` computes to 0, so a ready pod always exists across
   a rollout — but Traefik still returns a handful of 502s at cutover while endpoint
   removal propagates. Measured over three rollouts: 2–3 failed requests each, ~0.5% of

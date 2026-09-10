@@ -24,10 +24,21 @@ data "aws_iam_policy_document" "github_assume_role" {
       values   = ["sts.amazonaws.com"]
     }
 
+    # Pinned to the refs the ECR workflow actually presents, never a wildcard. The
+    # previous "repo:<owner>/<repo>:*" also matched "repo:<owner>/<repo>:pull_request",
+    # which is the subject a fork's pull request presents -- harmless while the repo is
+    # private, a real hole the moment it is public. StringLike is kept because the tag
+    # pattern needs the glob; both values are otherwise exact.
+    #
+    #   refs/tags/v*   release-ecr on a version tag
+    #   refs/heads/main  the same workflow via workflow_dispatch
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:*"]
+      values = [
+        "repo:${var.github_repo}:ref:refs/tags/v*",
+        "repo:${var.github_repo}:ref:refs/heads/main",
+      ]
     }
   }
 }
