@@ -1,0 +1,42 @@
+{
+  "model_name": "taxi-trip-duration",
+  "inputs": [
+    {
+      "name": "pickup_hour",
+      "type": "integer",
+      "numpy_dtype": "int32"
+    },
+    {
+      "name": "pickup_weekday",
+      "type": "integer",
+      "numpy_dtype": "int32"
+    },
+    {
+      "name": "is_weekend",
+      "type": "integer",
+      "numpy_dtype": "int32"
+    },
+    {
+      "name": "PULocationID",
+      "type": "long",
+      "numpy_dtype": "int64"
+    },
+    {
+      "name": "DOLocationID",
+      "type": "long",
+      "numpy_dtype": "int64"
+    },
+    {
+      "name": "passenger_count",
+      "type": "integer",
+      "numpy_dtype": "int32"
+    }
+  ],
+  "output": {
+    "type": "tensor",
+    "dtype": "float64",
+    "shape": [
+      -1
+    ]
+  }
+}

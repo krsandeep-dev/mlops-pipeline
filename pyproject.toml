@@ -28,6 +28,11 @@ dev = [
     "prometheus-fastapi-instrumentator>=8.1.0",
     "pydantic-settings>=2.15.0",
     "pytest>=9.1.1",
+    # Pinned to the version the champion model logged, so the host test environment,
+    # the serving image and the training environment agree. Nothing requires a newer
+    # rich (dvc needs >=12); letting it float made serving/requirements.txt and the
+    # lockfile disagree, which is exactly what the drift check exists to catch.
+    "rich==14.3.4",
     "ruff>=0.16.3",
     "uvicorn>=0.52.3",
 ]

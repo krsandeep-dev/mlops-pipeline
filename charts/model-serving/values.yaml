@@ -1,5 +1,5 @@
 image:
-  repository: mlops-serving
+  repository: ghcr.io/krsandeep-dev/mlops-serving
   # No default on purpose. The image reaches the node only through `k3d image import`,
   # and `make image` stamps the tag it built into .image-tag. A default here -- "latest",
   # an appVersion, or the tag copied from the raw manifest -- could install an image that
