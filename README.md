@@ -123,7 +123,7 @@ The AWS layer is deliberately minimal and fully described in `infra/terraform/`:
 | Resource | Purpose | Cost when idle |
 | --- | --- | --- |
 | S3 bucket | DVC remote | ~$0.02/GB-month, lifecycle rules cap growth |
-| ECR repository | Inference API images | ~$0.10/GB-month, last 10 images retained |
+| ECR repository | Inference API images | ~$0.10/GB-month, last 3 images retained |
 | GitHub OIDC provider + IAM role | Keyless CI authentication | free |
 
 No always-on compute is provisioned. The ECS Fargate demo in Phase 6 is applied and
@@ -138,7 +138,19 @@ cd infra/terraform && terraform init && terraform plan
 
 **Security posture:** CI authenticates via GitHub OIDC — no long-lived AWS keys exist
 anywhere in the repo or in GitHub secrets. The IAM role is scoped to one repository, one
-ECR repository, and one S3 bucket.
+ECR repository, and one S3 bucket, and its trust policy pins the `sub` claim to the exact
+refs that may assume it:
+
+```
+repo:krsandeep-dev/mlops-pipeline:ref:refs/tags/v*
+repo:krsandeep-dev/mlops-pipeline:ref:refs/heads/main
+```
+
+That matters more than it looks. The original condition was `repo:<owner>/<repo>:*`, which
+also matches `repo:<owner>/<repo>:pull_request` — the subject a fork's pull request
+presents. Harmless while the repository was private; a real hole the moment it went
+public. Only three images are retained because the serving image is ~1.4 GB and the
+project's rule is near-zero cloud cost.
 
 ## Roadmap
 
@@ -189,33 +201,68 @@ that preceded it were deleted once the chart reproduced them; they are in git hi
 `459c389` (`k8s/`) if you want to compare the two forms. Keeping both would have
 guaranteed drift the moment ArgoCD started syncing the chart.
 
-`make help` lists the targets. M1 (app on the Compose network), M2 (cluster + egress
-proven from an in-cluster pod) and M3 (raw manifests, prediction served through the
-Traefik ingress at http://mlops-serving.localhost:8081) and M4 (promotion demo, then the
-same deployment as a Helm chart) are green. Phase 3 is complete. Image-consuming targets default
-to the tag `make image` last stamped, so they keep working after a commit moves `HEAD`;
-pass `TAG=<tag>` to override.
+`make help` lists the targets. All four milestones are green: M1 the app on the Compose
+network, M2 cluster egress proven from an in-cluster pod, M3 a prediction served through
+the Traefik ingress at http://mlops-serving.localhost:8081, and M4 the promotion demo
+followed by the Helm chart reproducing it. Image-consuming targets default to the tag
+`make image` last stamped, so they keep working after a commit moves `HEAD`; pass
+`TAG=<tag>` to override.
 
 ```bash
-make image           # multi-stage build from HEAD; stamps the tag into .image-tag
-make m1-up m1-verify # run on the Compose network; signature parity, then HTTP contract
+make image             # multi-stage build from HEAD; stamps the tag into .image-tag
+make m1-up m1-verify   # on the Compose network; signature parity, then HTTP contract
 make m1-down
-make cluster-up      # k3d cluster from the committed k3d/cluster.yaml
-make cluster-start   # restart a stopped cluster (cluster-stop to park it)
-make m2-verify       # in-cluster pod: tracking API + a real artifact download
-make m3-deploy       # raw manifests via kustomize, wait for the rollout
-make m3-verify       # assert the contract through the Traefik ingress from the host
-make helm-install    # the same deployment as a chart; tag supplied from .image-tag
+make export-signature  # refresh serving/signature.json from the live champion
+make cluster-up        # k3d cluster from the committed k3d/cluster.yaml
+make cluster-start     # restart a stopped cluster (cluster-stop to park it)
+make m2-verify         # in-cluster pod: tracking API + a real artifact download
+make helm-install      # deploy the LOCAL build (tag from .image-tag)
+make helm-sync         # deploy the COMMITTED tag from values.yaml, pulled from GHCR
+make m3-verify         # assert the contract through the Traefik ingress from the host
 make helm-uninstall
 ```
 
 The serving image is published to
 [GHCR](https://github.com/krsandeep-dev/mlops-pipeline/pkgs/container/mlops-serving) as a
-multi-arch manifest (linux/amd64 + linux/arm64) and can be pulled anonymously:
+multi-arch manifest (linux/amd64 + linux/arm64), public, and pullable with no credentials:
 
 ```bash
-docker pull ghcr.io/krsandeep-dev/mlops-serving:7380a73
+# the tag currently deployed is the one committed in the chart
+docker pull ghcr.io/krsandeep-dev/mlops-serving:$(grep -E '^  tag:' charts/model-serving/values.yaml | tr -d ' "' | cut -d: -f2)
 ```
+
+### CI/CD (Phase 4, in progress)
+
+[![CI](https://github.com/krsandeep-dev/mlops-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/krsandeep-dev/mlops-pipeline/actions/workflows/ci.yml)
+
+Three workflows, each holding the narrowest permissions that let it work.
+
+| Workflow | Trigger | Permissions | Does |
+| --- | --- | --- | --- |
+| `ci.yml` | every PR and push | `contents: read` | ruff, pytest, signature contract, requirements drift, `helm lint`/`template`, terraform `fmt`/`validate`, Trivy (report only) |
+| `release-ghcr.yml` | push to `main`, path-filtered | `contents: write`, `packages: write` | native amd64 + arm64 builds, pushed by digest and joined into one manifest list, then the values bump |
+| `release-ecr.yml` | `v*` tag or dispatch | `id-token: write` | copies the verified `linux/amd64` image from GHCR to ECR by digest, keylessly via OIDC |
+
+**Two tag sources, one rule.** `charts/model-serving/values.yaml` is authoritative for
+*what is deployed* — CI commits it, `make helm-sync` deploys it, and Phase 7's ArgoCD will
+read the same value with no pipeline change. `.image-tag` is a local build stamp and
+feeds `make helm-install` only. The chart's `required` guard refuses an empty tag, so a
+fresh clone before the first release fails loudly instead of guessing.
+
+**The signature contract.** `m1-verify` gates on an in-network check that loads the model,
+which a hosted runner cannot do — it would skip, which is the failure the gate exists to
+prevent. So the champion's signature is committed to `serving/signature.json` and checked
+three ways against one implementation: a pure test CI runs with no network, the in-network
+check comparing the file to the live champion, and the opt-in pytest test calling the same
+function. The file cannot drift from the registry without the second failing, and the
+pydantic schema cannot drift from the file without the first. The contract records no
+version or timestamp, only the signature, so a promotion that does not change the
+signature produces no diff. Refresh it with `make export-signature`.
+
+**CI never deploys.** A hosted runner has no route to a cluster on a laptop, and the
+workarounds — a tunnel, an exposed API server, a self-hosted runner holding cluster
+credentials — are all worse than the gap. The pipeline stops at a committed tag. That gap
+is the argument for Phase 7's GitOps, not an obstacle to it.
 
 ### Trigger the training DAG over the REST API
 
@@ -241,14 +288,20 @@ curl -s -X POST http://localhost:8080/api/v2/dags/train_and_promote/dagRuns \
 ## Repository layout
 
 ```
+├── .github/workflows/   # CI, GHCR release, ECR release
+├── charts/model-serving/ # the Helm chart -- the only definition of the deployment
 ├── dags/                # Airflow DAGs
 ├── data/                # DVC-tracked datasets (pointers in git, bytes in the remote)
+├── k3d/                 # committed cluster config + the M2 artifact probe
+├── serving/             # FastAPI app, Dockerfile, pinned image requirements,
+│                        #   and signature.json -- the committed model contract
 ├── src/mlops_pipeline/  # shared Python package
 ├── docker/              # service images and init scripts
-├── infra/terraform/     # AWS resources (S3, ECR, IAM)
-├── scripts/             # smoke tests and utilities
+├── infra/terraform/     # AWS resources (S3, ECR, IAM + GitHub OIDC)
+├── scripts/             # smoke tests, signature export, drift check
 ├── tests/
 ├── docs/                # phase specs
+├── Makefile             # the local workflow; `make help` lists it
 └── docker-compose.yml
 ```
 

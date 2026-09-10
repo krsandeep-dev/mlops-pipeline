@@ -154,7 +154,7 @@ m2-dns:  ## M2 step 1: can a pod resolve the compose service names?
 	kubectl run dnscheck-$$RANDOM --rm -i --restart=Never --image=busybox:1.36 -- \
 	  sh -c 'nslookup mlflow. && nslookup minio.'
 
-image-import: require-image  ## Load the serving image into the cluster (no registry until Phase 4)
+image-import: require-image  ## Load a locally built image into the cluster (helm-sync pulls from GHCR instead)
 	k3d image import $(IMAGE):$(TAG) -c $(CLUSTER)
 
 # The probe runs on the serving image rather than a bare python one: it already carries
