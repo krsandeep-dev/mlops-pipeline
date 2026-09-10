@@ -87,6 +87,12 @@ flowchart TB
   is inside the SigV4 signature and no ingress or port remap can rewrite it. Any client
   must reach a host literally named `minio` on port 9000, which is why the k3d cluster
   attaches to `mlops-pipeline_default` rather than talking to published host ports.
+- **Serving holds no credentials, because the presigned URL is the credential.** The pod
+  gets a ConfigMap with two URIs and no Secret: MLflow answers artifact requests with a
+  presigned URL whose SigV4 signature travels in the query string, so the client never
+  constructs an S3 request and never needs a key. Verified by loading the model with
+  deliberately wrong `AWS_*` values and a bogus `MLFLOW_S3_ENDPOINT_URL` — it succeeded in
+  1.53 s. The credential that does not exist cannot leak, expire, or need rotating.
 - **The artifact path is bounded, because its failure mode is a stall, not an error.**
   MLflow's presigned download passes `timeout=None` and retries five times per file, so a
   misconfigured network hangs silently — ten minutes and zero bytes, measured. Serving caps
@@ -161,8 +167,9 @@ Airflow at http://localhost:8080
 
 ### Serving (Phase 3, in progress)
 
-`make help` lists the targets. M1 (app on the Compose network) and M2 (cluster + egress
-proven from an in-cluster pod) are green; M3/M4 are next. Image-consuming targets default
+`make help` lists the targets. M1 (app on the Compose network), M2 (cluster + egress
+proven from an in-cluster pod) and M3 (raw manifests, prediction served through the
+Traefik ingress at http://mlops-serving.localhost:8081) are green; M4 is next. Image-consuming targets default
 to the tag `make image` last stamped, so they keep working after a commit moves `HEAD`;
 pass `TAG=<tag>` to override.
 
@@ -173,6 +180,8 @@ make m1-down
 make cluster-up      # k3d cluster from the committed k3d/cluster.yaml
 make cluster-start   # restart a stopped cluster (cluster-stop to park it)
 make m2-verify       # in-cluster pod: tracking API + a real artifact download
+make m3-deploy       # raw manifests via kustomize, wait for the rollout
+make m3-verify       # assert the contract through the Traefik ingress from the host
 ```
 
 ### Trigger the training DAG over the REST API
@@ -243,6 +252,11 @@ Each gap is tracked and closed (or documented) in Phase 6:
   (measured: `NXDOMAIN` even for `kubernetes.default`). `make cluster-up` and
   `make cluster-start` therefore restart CoreDNS and wait for it every time; the step is
   idempotent and costs a few seconds.
+- The serving pod runs non-root with all capabilities dropped, but
+  `readOnlyRootFilesystem` is off: MLflow downloads the model into a cache under `$HOME`
+  at startup. Closing it needs `emptyDir` mounts for `$HOME` and `/tmp`.
+- The ingress is unauthenticated plain HTTP and the Deployment is a single replica — no
+  TLS, no auth, no HA. Acceptable on a local k3d cluster, not in production.
 - The serving image is ~1.4 GB, dominated by mlflow + scipy + scikit-learn pulled in by the
   model's logged requirements. Production trims this with `mlflow-skinny` plus only the
   flavor's runtime, or a purpose-built model server.

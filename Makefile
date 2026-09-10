@@ -13,6 +13,9 @@ CLUSTER        := mlops
 NAMESPACE      := serving
 MODEL_URI      ?= models:/taxi-trip-duration@champion
 M1_PORT        ?= 8000
+INGRESS_HOST   ?= mlops-serving.localhost
+INGRESS_PORT   ?= 8081
+EXPECT_VERSION ?= 4
 
 # `make image` stamps the tag it produced here; every consuming target defaults to it.
 # Without this the tag tracked HEAD, so the first commit after a build left run/import
@@ -23,7 +26,8 @@ TAG         ?= $(if $(STAMPED_TAG),$(STAMPED_TAG),$(GIT_SHA))
 
 .PHONY: help lint test image require-image m1-up m1-verify m1-down \
         cluster-up cluster-start cluster-stop cluster-down cluster-info \
-        coredns-refresh m2-dns m2-verify image-import signature-check
+        coredns-refresh m2-dns m2-verify image-import signature-check \
+        m3-deploy m3-verify m3-down
 
 help:  ## List targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -143,3 +147,24 @@ m2-verify: image-import  ## M2 step 2: tracking API + a real artifact download, 
 	  --env=MLFLOW_TRACKING_URI=http://mlflow:5000 \
 	  --env=MODEL_URI='$(MODEL_URI)' \
 	  --command -- python /dev/stdin < k3d/artifact_probe.py
+
+# ---------------------------------------------------------------- M3
+
+# apply -k, not apply -f: files are applied alphabetically, so configmap.yaml raced
+# ahead of namespace.yaml and failed on a clean cluster. Kustomize orders by kind.
+#
+# `set image` after the apply because the committed manifest pins a concrete tag for
+# reproducibility, while a local rebuild moves .image-tag. M4's Helm chart replaces this
+# with a values-driven tag, which is the better answer once a chart exists.
+m3-deploy: image-import  ## M3: apply the raw manifests and wait for the rollout
+	kubectl apply -k k8s/
+	kubectl -n $(NAMESPACE) set image deploy/model-serving serving=$(IMAGE):$(TAG)
+	kubectl -n $(NAMESPACE) rollout status deploy/model-serving --timeout=300s
+	kubectl -n $(NAMESPACE) get pods -o wide
+
+m3-verify:  ## M3: assert the contract through the Traefik ingress from the host
+	uv run python scripts/smoke_serving.py \
+	  --url http://$(INGRESS_HOST):$(INGRESS_PORT) --expect-version $(EXPECT_VERSION)
+
+m3-down:  ## M3: remove the deployed manifests
+	-kubectl delete -k k8s/
