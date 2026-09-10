@@ -118,6 +118,16 @@ Multi-stage: builder installs pinned deps (logged model requirements reconciled 
 - **M3 — deployed:** manifests applied; probes green; prediction served via ingress from the host.
 - **M4 — promotion demo (definition of done):** move `@champion` to a different version (or re-run promotion), `kubectl rollout restart`, `/model` reflects the new version, predictions still valid. Then Helm: remove the raw-manifest deployment, `helm install` reproduces M3 + M4.
 
+  **Pass criterion (settled during M4): `/model`'s `run_id` follows the alias. Changing
+  prediction values is NOT the criterion.** v1 and v4 are the same model — identical MAE
+  to 13 decimal places (3.4599869925067), identical `data_url`, identical artifact byte
+  count — because training is deterministic (`random_state=42`) over the same DVC-pinned
+  reference sample. Their `sha256` differs only through skops serialization metadata.
+  Identical predictions after a flip are therefore the **expected, correct** result, not a
+  failed demo; this is the same fact the gate reports when it rejects candidates at
+  "MAE change 0.00%". A promotion visible in the prediction values needs a genuinely
+  different model, which arrives with Phase 5's drift data (later months of taxi data).
+
 ## 10. Deliverables
 
 - Serving app + tests (schema-parity test, dtype-coercion test)
