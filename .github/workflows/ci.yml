@@ -75,13 +75,12 @@ jobs:
   # scientific-Python image would fail on transitive CVEs nobody here can fix.
   trivy:
     runs-on: ubuntu-latest
-    # Non-blocking at the JOB level, not just on the scan step: a failure in the build
-    # step before the scan would otherwise still turn the PR red, which is exactly the
-    # blocking behaviour this job is supposed not to have.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
 
+      # Deliberately blocking. This is the only place a PR exercises the Dockerfile, so a
+      # build failure must turn the PR red -- otherwise a broken image reaches main and
+      # is not discovered until release-ghcr fails after the merge.
       - name: Build the image locally for scanning
         run: docker build -f serving/Dockerfile -t serving-scan:${{ github.sha }} .
 
