@@ -12,7 +12,9 @@ import sys
 
 import httpx
 
-SAMPLE = {
+# Same route (138 -> 236), so RUSH_HOUR and OVERNIGHT differ only in time of day and
+# the pair isolates one variable. SHORT_HOP is a different, shorter trip.
+RUSH_HOUR = {
     "pickup_hour": 8,
     "pickup_weekday": 1,
     "is_weekend": 0,
@@ -20,6 +22,11 @@ SAMPLE = {
     "DOLocationID": 236,
     "passenger_count": 1,
 }
+OVERNIGHT = {**RUSH_HOUR, "pickup_hour": 3, "pickup_weekday": 6, "is_weekend": 1}
+SHORT_HOP = {**RUSH_HOUR, "pickup_hour": 17, "pickup_weekday": 4, "PULocationID": 161,
+             "passenger_count": 2}
+
+SAMPLE = RUSH_HOUR  # the single-record payload used for the 422 check
 
 # The model predicts trip duration in minutes and training clipped the target to
 # [1, 120]; anything outside a slightly wider band means the frame reached the booster
@@ -58,13 +65,26 @@ def main() -> int:
         )
         return 1
 
-    batch = client.post("/predict", json={"records": [SAMPLE, SAMPLE]})
+    batch = client.post("/predict", json={"records": [RUSH_HOUR, OVERNIGHT, SHORT_HOP]})
     assert batch.status_code == 200, f"/predict -> {batch.status_code} {batch.text}"
     payload = batch.json()
     predictions = payload["predictions"]
     print(f"/predict          200 {predictions} (model v{payload['model']['version']})")
 
-    assert len(predictions) == 2, f"expected 2 predictions, got {len(predictions)}"
+    assert len(predictions) == 3, f"expected 3 predictions, got {len(predictions)}"
+
+    # Varied records must produce varied output: identical predictions would mean the
+    # features never reached the booster, which a single-record check cannot detect.
+    rush, overnight, _short = predictions
+    if rush <= overnight:
+        print(
+            f"FAIL: rush hour {rush:.3f} min is not longer than overnight "
+            f"{overnight:.3f} min on the same route; features may not be reaching "
+            "the model",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"/predict (order)  rush {rush:.1f} > overnight {overnight:.1f} min")
     for value in predictions:
         if not MIN_PLAUSIBLE_MIN <= value <= MAX_PLAUSIBLE_MIN:
             print(
