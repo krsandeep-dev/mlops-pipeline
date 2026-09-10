@@ -6,7 +6,15 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 GIT_SHA        := $(shell git rev-parse --short HEAD)
-IMAGE          := mlops-serving
+# The full GHCR repository string, even for local-only builds. imagePullPolicy is
+# IfNotPresent, which only serves both the local loop (build + k3d import) and the sync
+# loop (pull from GHCR) if a locally built image and a pulled image share one repository
+# string. A bare `mlops-serving` would make the two paths different images.
+REGISTRY       := ghcr.io/krsandeep-dev
+IMAGE          := $(REGISTRY)/mlops-serving
+# Docker container names cannot contain slashes, so the M1 container needs its own short
+# name now that IMAGE carries the registry path.
+M1_CONTAINER   := mlops-serving-m1
 IMAGE_TAG_FILE := .image-tag
 COMPOSE_NET    := mlops-pipeline_default
 CLUSTER        := mlops
@@ -27,7 +35,7 @@ TAG         ?= $(if $(STAMPED_TAG),$(STAMPED_TAG),$(GIT_SHA))
 .PHONY: help lint test image require-image m1-up m1-verify m1-down \
         cluster-up cluster-start cluster-stop cluster-down cluster-info \
         coredns-refresh m2-dns m2-verify image-import signature-check \
-        m3-deploy m3-verify m3-down \
+        m3-verify export-signature helm-sync \
         helm-lint helm-template helm-install helm-uninstall
 
 help:  ## List targets
@@ -61,7 +69,7 @@ require-image:
 # ---------------------------------------------------------------- M1
 
 m1-up: require-image  ## M1: run the image on the compose network (networking is a non-issue here)
-	docker run -d --rm --name $(IMAGE)-m1 \
+	docker run -d --rm --name $(M1_CONTAINER) \
 	  --network $(COMPOSE_NET) \
 	  -p $(M1_PORT):8000 \
 	  -e MLFLOW_TRACKING_URI=http://mlflow:5000 \
@@ -71,7 +79,7 @@ m1-up: require-image  ## M1: run the image on the compose network (networking is
 	@for i in $$(seq 1 60); do \
 	  if curl -sf http://localhost:$(M1_PORT)/health/ready >/dev/null 2>&1; then \
 	    echo "ready after $${i}s"; exit 0; fi; sleep 1; done; \
-	  echo "NOT READY -- logs:"; docker logs $(IMAGE)-m1; exit 1
+	  echo "NOT READY -- logs:"; docker logs $(M1_CONTAINER); exit 1
 
 # signature-check runs first: the int32/int64 contract is the thing most likely to break
 # silently on a retrain, so the gate asserts it rather than leaving it opt-in.
@@ -79,17 +87,29 @@ m1-verify: signature-check  ## M1: live signature parity, then the HTTP contract
 	uv run python scripts/smoke_serving.py --url http://localhost:$(M1_PORT)
 
 m1-down:  ## M1: stop the container
-	-docker stop $(IMAGE)-m1
+	-docker stop $(M1_CONTAINER)
 
 # Runs in-network on purpose: the assertion loads the model, and MLflow's presigned
 # artifact URLs only resolve inside the compose network. Same check() the pytest suite
 # calls under SERVING_SIGNATURE_CHECK=1, so there is one implementation.
+# Writes the committed contract. Runs in-network for the same reason signature-check
+# does: reading a signature means loading the model. JSON on stdout, logs on stderr.
+export-signature: require-image  ## Refresh serving/signature.json from the live champion
+	docker run --rm -i --network $(COMPOSE_NET) \
+	  -e MLFLOW_TRACKING_URI=http://mlflow:5000 \
+	  -e MODEL_URI='$(MODEL_URI)' \
+	  --entrypoint python $(IMAGE):$(TAG) /dev/stdin \
+	  < scripts/export_signature.py > serving/signature.json
+	@echo "wrote serving/signature.json"
+
 signature-check: require-image  ## Live signature-parity assertion, inside the compose network
 	docker run --rm --network $(COMPOSE_NET) \
 	  -e SERVING_SIGNATURE_CHECK=1 \
 	  -e MLFLOW_TRACKING_URI=http://mlflow:5000 \
 	  -e MODEL_URI='$(MODEL_URI)' \
-	  -v "$$PWD/scripts":/w/scripts:ro -w /w --entrypoint python $(IMAGE):$(TAG) \
+	  -v "$$PWD/scripts":/w/scripts:ro \
+	  -v "$$PWD/serving/signature.json":/w/serving/signature.json:ro \
+	  -w /w --entrypoint python $(IMAGE):$(TAG) \
 	  scripts/check_signature_parity.py
 
 # ---------------------------------------------------------------- M2
@@ -151,24 +171,9 @@ m2-verify: image-import  ## M2 step 2: tracking API + a real artifact download, 
 
 # ---------------------------------------------------------------- M3
 
-# apply -k, not apply -f: files are applied alphabetically, so configmap.yaml raced
-# ahead of namespace.yaml and failed on a clean cluster. Kustomize orders by kind.
-#
-# `set image` after the apply because the committed manifest pins a concrete tag for
-# reproducibility, while a local rebuild moves .image-tag. M4's Helm chart replaces this
-# with a values-driven tag, which is the better answer once a chart exists.
-m3-deploy: image-import  ## M3: apply the raw manifests and wait for the rollout
-	kubectl apply -k k8s/
-	kubectl -n $(NAMESPACE) set image deploy/model-serving serving=$(IMAGE):$(TAG)
-	kubectl -n $(NAMESPACE) rollout status deploy/model-serving --timeout=300s
-	kubectl -n $(NAMESPACE) get pods -o wide
-
 m3-verify:  ## M3: assert the contract through the Traefik ingress from the host
 	uv run python scripts/smoke_serving.py \
 	  --url http://$(INGRESS_HOST):$(INGRESS_PORT) --expect-version $(EXPECT_VERSION)
-
-m3-down:  ## M3: remove the deployed manifests
-	-kubectl delete -k k8s/
 
 # ---------------------------------------------------------------- M4 / Helm
 
@@ -188,6 +193,17 @@ helm-install: require-image image-import  ## Install/upgrade the release from th
 	helm upgrade --install $(RELEASE) $(CHART) \
 	  --namespace $(NAMESPACE) --create-namespace \
 	  --set image.tag=$(TAG) \
+	  --wait --timeout 5m
+	kubectl -n $(NAMESPACE) get pods -o wide
+
+# The other half of the tag-precedence rule: helm-install deploys the LOCAL build from
+# .image-tag, helm-sync deploys whatever CI committed to values.yaml and lets the cluster
+# pull it from GHCR. Distinct names because they answer different questions -- "does my
+# build work" versus "does the declared state deploy". Phase 7's ArgoCD reads the same
+# committed value this target does.
+helm-sync:  ## Deploy the tag committed in values.yaml (pulls from GHCR)
+	helm upgrade --install $(RELEASE) $(CHART) \
+	  --namespace $(NAMESPACE) --create-namespace \
 	  --wait --timeout 5m
 	kubectl -n $(NAMESPACE) get pods -o wide
 

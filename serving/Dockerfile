@@ -19,6 +19,13 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 FROM python:3.11-slim AS runtime
 
+# Links the GHCR package to this repository. GitHub reads it at publish time, so it has
+# to be present on the FIRST push -- adding it later does not retroactively link an
+# already-published package.
+LABEL org.opencontainers.image.source="https://github.com/krsandeep-dev/mlops-pipeline" \
+      org.opencontainers.image.description="FastAPI serving of the MLflow @champion trip-duration model" \
+      org.opencontainers.image.licenses="MIT"
+
 # LightGBM links the GNU OpenMP runtime dynamically and no wheel bundles it, so a slim
 # base fails at import with "libgomp.so.1: cannot open shared object file". Same reason
 # the Airflow image installs it; the macOS equivalent is `brew install libomp`.
