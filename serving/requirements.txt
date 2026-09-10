@@ -1,0 +1,23 @@
+# Pinned from the champion model's own logged requirements (MLflow records the exact
+# environment the model was trained in) so the serving runtime matches what produced it.
+# Fetched with: mlflow.artifacts.download_artifacts('models:/taxi-trip-duration@champion')
+#
+# The Airflow constraints file is the parity reference elsewhere in this repo, but it
+# does not apply here: this image installs no Airflow, so its two deviations (pandas,
+# cryptography) are not in play. The model's logged pins are the reference instead.
+mlflow==3.15.1
+lightgbm==4.7.0
+numpy==2.4.6
+pandas==2.3.3
+psutil==7.2.2
+rich==14.3.4
+scikit-learn==1.9.0
+scipy==1.17.1
+# The model is serialised with skops, not pickle -- without this the pyfunc load fails.
+skops==0.14.0
+
+# Serving stack, pinned to the versions the host tests ran against.
+fastapi==0.141.1
+uvicorn==0.52.3
+pydantic-settings==2.15.0
+prometheus-fastapi-instrumentator==8.1.0

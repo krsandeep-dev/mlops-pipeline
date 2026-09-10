@@ -17,11 +17,15 @@ resource "aws_ecr_lifecycle_policy" "api" {
   policy = jsonencode({
     rules = [{
       rulePriority = 1
-      description  = "Keep only the 10 most recent images"
+      description  = "Keep only the 3 most recent images"
       selection = {
-        tagStatus   = "any"
-        countType   = "imageCountMoreThan"
-        countNumber = 10
+        tagStatus = "any"
+        countType = "imageCountMoreThan"
+        # 3, not 10: the serving image is ~1.4 GB, and ECR bills per GB beyond a 500 MB
+        # free tier that expires after 12 months. Ten versions would be ~14 GB standing
+        # against a project rule of near-zero cloud cost, for images whose only consumer
+        # is a Phase 6 demo that is torn down the same session.
+        countNumber = 3
       }
       action = { type = "expire" }
     }]

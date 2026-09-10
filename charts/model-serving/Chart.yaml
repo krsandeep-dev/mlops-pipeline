@@ -1,0 +1,8 @@
+apiVersion: v2
+name: model-serving
+description: FastAPI serving of the MLflow @champion trip-duration model
+type: application
+version: 0.1.0
+# The application version is the model contract, not the image tag: the image tag is a
+# build coordinate that changes on every commit and is supplied at install time.
+appVersion: "1.0.0"

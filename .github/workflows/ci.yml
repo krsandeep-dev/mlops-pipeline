@@ -1,0 +1,94 @@
+# Checks that need no credentials and no cluster. Deliberately NOT path-filtered: these
+# run on every PR and every push, which is what makes the docs-only merge a meaningful
+# proof that release-ghcr is the thing gated by paths.
+name: CI
+
+on:
+  pull_request:          # never pull_request_target: that would run fork code with secrets
+  push:
+    branches: [main]
+
+# Least privilege: this workflow reads code and nothing else.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # --python-version is not passed: .python-version and requires-python pin 3.11,
+      # and uv respects them. Naming it here would create a second source of truth.
+      - name: Install from the lockfile
+        run: uv sync --locked --group dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      # Includes the pure signature-contract test. The in-network variant self-skips here,
+      # which is expected and safe precisely because the contract test does run.
+      - name: Tests
+        run: uv run pytest -q
+
+      - name: Requirements drift (serving image vs lockfile)
+        run: uv run python scripts/check_requirements_drift.py
+
+      - name: Helm lint and template
+        run: |
+          helm lint charts/model-serving --set image.tag=ci-check
+          helm template model-serving charts/model-serving \
+            --namespace serving --set image.tag=ci-check > /dev/null
+
+      # The chart must refuse to render without a tag. If this ever succeeds, the guard
+      # that stops a stale-but-passing image reaching the cluster has been lost.
+      - name: Chart refuses to render without an image tag
+        run: |
+          if helm template model-serving charts/model-serving --namespace serving >/dev/null 2>&1; then
+            echo "FAIL: chart rendered with no image.tag; the required guard is gone"
+            exit 1
+          fi
+          echo "OK: chart refused to render without image.tag"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      # Pure checks only: fmt and validate need no credentials and no state.
+      - name: Terraform fmt and validate
+        working-directory: infra/terraform
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false
+          terraform validate
+
+  # Reports, never blocks (spec section 7). A blocking vulnerability gate on a 1.4 GB
+  # scientific-Python image would fail on transitive CVEs nobody here can fix.
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Deliberately blocking. This is the only place a PR exercises the Dockerfile, so a
+      # build failure must turn the PR red -- otherwise a broken image reaches main and
+      # is not discovered until release-ghcr fails after the merge.
+      - name: Build the image locally for scanning
+        run: docker build -f serving/Dockerfile -t serving-scan:${{ github.sha }} .
+
+      - name: Trivy scan (report only)
+        uses: aquasecurity/trivy-action@v0.36.0
+        continue-on-error: true
+        with:
+          image-ref: serving-scan:${{ github.sha }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true

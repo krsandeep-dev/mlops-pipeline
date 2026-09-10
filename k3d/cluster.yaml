@@ -1,0 +1,44 @@
+# k3d cluster definition -- committed rather than ad-hoc CLI flags so the cluster is
+# reproducible and the network decision is reviewable in git.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: mlops
+
+servers: 1
+agents: 1
+
+# THE network decision (spec section 5, mechanism A). The cluster's nodes join the
+# Compose network, so Docker's embedded DNS resolves `mlflow` and `minio` natively.
+#
+# Why this and not the alternatives:
+#   * MLflow 3.15 serves artifacts by presigned redirect, not by proxying bytes: the
+#     tracking server returns http://minio:9000/... signed with X-Amz-SignedHeaders=host.
+#     The Host header is inside the SigV4 signature, so the name and port cannot be
+#     rewritten -- any client must reach a host literally called `minio` on port 9000.
+#   * Mechanism B (host-published ports + host.k3d.internal) would additionally need
+#     --allowed-hosts widened on the live MLflow service, which returns 403 for
+#     host.k3d.internal:5001 today. Not approved; this repo does not edit running
+#     Phase 1-2 infrastructure to serve Phase 3.
+#
+# Subnet safety: the Compose network is 172.18.0.0/16, k3s defaults are 10.42.0.0/16
+# (pods) and 10.43.0.0/16 (services). Disjoint -- verified before attaching.
+network: mlops-pipeline_default
+
+ports:
+  # Traefik (the k3s-bundled ingress controller) reached through the k3d load balancer.
+  # 8080 is Airflow's, 8081 is free.
+  - port: 8081:80
+    nodeFilters:
+      - loadbalancer
+
+options:
+  k3d:
+    wait: true
+    timeout: "180s"
+  k3s:
+    extraArgs:
+      # Traefik ships with k3s and is the ingress the spec calls for; keep it.
+      - arg: --disable=metrics-server
+        nodeFilters:
+          - server:*

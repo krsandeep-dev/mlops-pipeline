@@ -23,11 +23,21 @@ packages = ["src/mlops_pipeline"]
 
 [dependency-groups]
 dev = [
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "prometheus-fastapi-instrumentator>=8.1.0",
+    "pydantic-settings>=2.15.0",
     "pytest>=9.1.1",
+    # Pinned to the version the champion model logged, so the host test environment,
+    # the serving image and the training environment agree. Nothing requires a newer
+    # rich (dvc needs >=12); letting it float made serving/requirements.txt and the
+    # lockfile disagree, which is exactly what the drift check exists to catch.
+    "rich==14.3.4",
     "ruff>=0.16.3",
+    "uvicorn>=0.52.3",
 ]
 
 [tool.pytest.ini_options]
 # Mirrors PYTHONPATH=/opt/airflow/src in the Airflow containers, so the package
 # imports the same way on the host without being installed.
-pythonpath = ["src"]
+pythonpath = ["src", "."]

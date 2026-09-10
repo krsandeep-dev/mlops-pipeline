@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "model-serving.name" . }}
+  labels:
+    {{- include "model-serving.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "model-serving.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "model-serving.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Roll the pods when the ConfigMap changes. Without this, editing the tracking or
+        # model URI leaves the running pod on the old values until something else
+        # restarts it -- the alias is read once at startup, so stale config is invisible.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: serving
+          image: "{{ .Values.image.repository }}:{{ required "image.tag is required -- install with `make helm-install`, which supplies the tag stamped in .image-tag by `make image`. Defaulting it risks deploying an image that passes every test but is not the one that was verified." .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: {{ include "model-serving.name" . }}
+          startupProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # Off deliberately: MLflow downloads the model into a cache under $HOME at
+            # startup. Closing it needs emptyDir mounts for $HOME and /tmp.
+            readOnlyRootFilesystem: false
