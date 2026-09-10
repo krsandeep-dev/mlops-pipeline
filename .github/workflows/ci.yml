@@ -49,15 +49,19 @@ jobs:
           helm template model-serving charts/model-serving \
             --namespace serving --set image.tag=ci-check > /dev/null
 
-      # The chart must refuse to render without a tag. If this ever succeeds, the guard
-      # that stops a stale-but-passing image reaching the cluster has been lost.
-      - name: Chart refuses to render without an image tag
+      # The chart must refuse to render an EMPTY tag. Testing the committed default
+      # instead would only work until CI bumped it: values.yaml legitimately carries a
+      # tag after the first release, so "renders with no --set" stopped meaning anything.
+      # Forcing the value empty tests the required guard itself, which is what stops a
+      # stale-but-passing image reaching the cluster.
+      - name: Chart refuses to render an empty image tag
         run: |
-          if helm template model-serving charts/model-serving --namespace serving >/dev/null 2>&1; then
-            echo "FAIL: chart rendered with no image.tag; the required guard is gone"
+          if helm template model-serving charts/model-serving \
+               --namespace serving --set image.tag="" >/dev/null 2>&1; then
+            echo "FAIL: chart rendered an empty image.tag; the required guard is gone"
             exit 1
           fi
-          echo "OK: chart refused to render without image.tag"
+          echo "OK: chart refused to render an empty image.tag"
 
       - uses: hashicorp/setup-terraform@v3
         with:
