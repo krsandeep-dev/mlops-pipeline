@@ -201,9 +201,16 @@ helm-install: require-image image-import  ## Install/upgrade the release from th
 # pull it from GHCR. Distinct names because they answer different questions -- "does my
 # build work" versus "does the declared state deploy". Phase 7's ArgoCD reads the same
 # committed value this target does.
+# --reset-values is load-bearing, not decoration. helm upgrade carries forward the
+# user-supplied values of the previous release, so after a `helm-install --set
+# image.tag=<local>` this target would keep deploying that local tag and silently ignore
+# the committed one -- invisible whenever the two happen to match. Resetting makes the
+# chart's values.yaml the only input, which is what "deploy the declared state" means and
+# what Phase 7's ArgoCD will do by construction.
 helm-sync:  ## Deploy the tag committed in values.yaml (pulls from GHCR)
 	helm upgrade --install $(RELEASE) $(CHART) \
 	  --namespace $(NAMESPACE) --create-namespace \
+	  --reset-values \
 	  --wait --timeout 5m
 	kubectl -n $(NAMESPACE) get pods -o wide
 
