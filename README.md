@@ -209,6 +209,14 @@ make helm-install    # the same deployment as a chart; tag supplied from .image-
 make helm-uninstall
 ```
 
+The serving image is published to
+[GHCR](https://github.com/krsandeep-dev/mlops-pipeline/pkgs/container/mlops-serving) as a
+multi-arch manifest (linux/amd64 + linux/arm64) and can be pulled anonymously:
+
+```bash
+docker pull ghcr.io/krsandeep-dev/mlops-serving:7380a73
+```
+
 ### Trigger the training DAG over the REST API
 
 This is the exact mechanism Phase 5's drift loop will use: mint a JWT from the auth
