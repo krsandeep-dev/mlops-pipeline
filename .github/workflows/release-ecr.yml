@@ -1,0 +1,106 @@
+# Copies an already-verified image from GHCR to ECR. It does NOT rebuild.
+#
+# Rebuilding at tag time would produce different bits from the ones k3d verified -- same
+# source, different base-image patch level, different wheel builds. Instead this reads
+# image.tag from the chart's values file at the tagged commit: that SHA was built, pushed
+# to GHCR and proven on the cluster, so tagging the bump commit is what cutting a release
+# means here. If the GHCR image for that SHA is missing, this fails loudly rather than
+# quietly manufacturing new bits.
+#
+# amd64 only: ECR exists to feed the Phase 6 Fargate demo, which is amd64. Copying arm64
+# too would double stored bytes for something nothing pulls, against a 3-image lifecycle.
+name: Release to ECR
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# id-token for OIDC; packages:read to pull the source image from GHCR. No contents:write:
+# this workflow publishes nothing back to the repository.
+permissions:
+  id-token: write
+  contents: read
+  packages: read
+
+concurrency:
+  group: release-ecr-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/mlops-serving
+  AWS_REGION: eu-north-1
+  ECR_REPOSITORY: mlops-pipeline/inference-api
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The committed tag is the contract between the two registries.
+      - name: Read the deployed tag from the chart
+        id: tag
+        run: |
+          TAG=$(grep -E '^  tag:' charts/model-serving/values.yaml | sed -E 's/^  tag: *"?([^"]*)"?/\1/')
+          if [ -z "$TAG" ]; then
+            echo "FAIL: charts/model-serving/values.yaml has no image.tag."
+            echo "      Nothing has been released to GHCR yet, so there is nothing to copy."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "copying $TAG from GHCR to ECR" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify the GHCR image exists before touching AWS
+        run: |
+          if ! docker buildx imagetools inspect ${{ env.GHCR_IMAGE }}:${{ steps.tag.outputs.tag }} > /tmp/src.txt 2>&1; then
+            echo "FAIL: ${{ env.GHCR_IMAGE }}:${{ steps.tag.outputs.tag }} does not exist in GHCR."
+            echo "      Tag a commit whose values.yaml points at a released image."
+            cat /tmp/src.txt
+            exit 1
+          fi
+          cat /tmp/src.txt
+
+      # Keyless. The trust policy pins sub to refs/tags/v* and refs/heads/main, so a fork
+      # PR (which presents repo:...:pull_request) cannot assume this role.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Copy the linux/amd64 manifest by digest
+        env:
+          ECR: ${{ steps.ecr.outputs.registry }}
+        run: |
+          SRC=${{ env.GHCR_IMAGE }}:${{ steps.tag.outputs.tag }}
+          DST=$ECR/${{ env.ECR_REPOSITORY }}:${{ github.ref_name }}
+
+          # Resolve the amd64 child digest out of the manifest list, so what lands in ECR
+          # is byte-identical to what was verified, not a re-resolution of a floating tag.
+          DIGEST=$(docker buildx imagetools inspect "$SRC" --raw \
+            | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="amd64") | .digest')
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "null" ]; then
+            echo "FAIL: no linux/amd64 manifest in $SRC"; exit 1
+          fi
+          echo "amd64 digest: $DIGEST"
+
+          docker buildx imagetools create --tag "$DST" "${{ env.GHCR_IMAGE }}@$DIGEST"
+          docker buildx imagetools inspect "$DST"
+
+          { echo "### copied"; echo "- source: \`$SRC\` @ \`$DIGEST\`"; echo "- target: \`$DST\`"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report stored size and lifecycle position
+        run: |
+          aws ecr describe-images --repository-name ${{ env.ECR_REPOSITORY }} \
+            --query 'reverse(sort_by(imageDetails,&imagePushedAt))[].{tag:imageTags[0],mb:imageSizeInBytes,pushed:imagePushedAt}' \
+            --output table | tee /tmp/ecr.txt
+          { echo '### ECR contents'; echo '```'; cat /tmp/ecr.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
