@@ -15,3 +15,6 @@ config/simple_auth_manager_passwords.json
 *.tfvars
 !*.tfvars.example
 crash.log
+
+# Written by `make image`: the tag of the last locally built serving image.
+.image-tag
