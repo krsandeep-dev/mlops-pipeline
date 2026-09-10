@@ -75,6 +75,10 @@ jobs:
   # scientific-Python image would fail on transitive CVEs nobody here can fix.
   trivy:
     runs-on: ubuntu-latest
+    # Non-blocking at the JOB level, not just on the scan step: a failure in the build
+    # step before the scan would otherwise still turn the PR red, which is exactly the
+    # blocking behaviour this job is supposed not to have.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
 
@@ -82,7 +86,7 @@ jobs:
         run: docker build -f serving/Dockerfile -t serving-scan:${{ github.sha }} .
 
       - name: Trivy scan (report only)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         continue-on-error: true
         with:
           image-ref: serving-scan:${{ github.sha }}
