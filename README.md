@@ -162,13 +162,16 @@ Airflow at http://localhost:8080
 ### Serving (Phase 3, in progress)
 
 `make help` lists the targets. M1 (app on the Compose network) and M2 (cluster + egress
-proven from an in-cluster pod) are green; M3/M4 are next.
+proven from an in-cluster pod) are green; M3/M4 are next. Image-consuming targets default
+to the tag `make image` last stamped, so they keep working after a commit moves `HEAD`;
+pass `TAG=<tag>` to override.
 
 ```bash
-make image           # multi-stage build, tagged with the short git SHA
-make m1-up m1-verify # run on the Compose network, assert the HTTP contract
+make image           # multi-stage build from HEAD; stamps the tag into .image-tag
+make m1-up m1-verify # run on the Compose network; signature parity, then HTTP contract
 make m1-down
 make cluster-up      # k3d cluster from the committed k3d/cluster.yaml
+make cluster-start   # restart a stopped cluster (cluster-stop to park it)
 make m2-verify       # in-cluster pod: tracking API + a real artifact download
 ```
 
@@ -228,11 +231,18 @@ Each gap is tracked and closed (or documented) in Phase 6:
 - Alerting: a failed DAG run only turns red in a UI nobody watches → wire
   `on_failure_callback` to Slack/PagerDuty and define per-task SLAs.
 - Serving's in-cluster DNS leans on Docker Desktop's resolver: CoreDNS runs with
-  `dnsPolicy: Default` and forwards Compose service names upstream to the node's resolver.
-  On Linux Docker that resolver is the network-local `127.0.0.11`, which a CoreDNS *pod*
-  cannot reach — so a Linux CI runner needs the documented CoreDNS `NodeHosts` fallback
-  (mechanism A′ in `docs/phase-3-serving-spec.md`). Production replaces the whole question
-  with a real object-store endpoint and DNS.
+  `dnsPolicy: Default` and forwards Compose service names upstream to the node's resolver,
+  which on this machine is `192.168.65.254` and resolves `minio` and `mlflow` to their live
+  container IPs — measured. On Linux Docker that upstream is expected to be the
+  network-local `127.0.0.11`, which a CoreDNS *pod* would not be able to reach, so a Linux
+  CI runner would need the CoreDNS `NodeHosts` fallback (mechanism A′ in
+  `docs/phase-3-serving-spec.md`). **That Linux behaviour is reasoned, not tested** — no
+  Linux host has been tried, and it should be confirmed before Phase 4 depends on it.
+  Production replaces the whole question with a real object-store endpoint and DNS.
+- A stopped-and-restarted k3d cluster comes back with CoreDNS holding stale state
+  (measured: `NXDOMAIN` even for `kubernetes.default`). `make cluster-up` and
+  `make cluster-start` therefore restart CoreDNS and wait for it every time; the step is
+  idempotent and costs a few seconds.
 - The serving image is ~1.4 GB, dominated by mlflow + scipy + scikit-learn pulled in by the
   model's logged requirements. Production trims this with `mlflow-skinny` plus only the
   flavor's runtime, or a purpose-built model server.
