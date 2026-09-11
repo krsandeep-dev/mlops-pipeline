@@ -6,7 +6,7 @@ image:
   # is present on the node, passes every probe and every smoke assertion, and is not the
   # image that was verified. `required` in the template turns that silent staleness into
   # a failed install. `make helm-install` supplies it from .image-tag.
-  tag: "7380a73"
+  tag: "7cd7a9e"
   # The cluster has no registry until Phase 4, so a pull attempt is always wrong.
   pullPolicy: IfNotPresent
 
