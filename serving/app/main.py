@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from serving.app.config import get_settings
+from serving.app.metrics import observe_predictions, record_loaded
 from serving.app.model import LoadedModel, coerce, load_with_timeout
 from serving.app.schemas import ModelInfo, PredictRequest, PredictResponse
 
@@ -30,6 +31,7 @@ def _load_into(state: ModelState) -> None:
     settings = get_settings()
     try:
         state.model = load_with_timeout(settings)
+        record_loaded(state.model.name, state.model.version, state.model.run_id)
         logger.info("model ready: %s v%s", state.model.name, state.model.version)
     except Exception as exc:  # noqa: BLE001 -- see below
         # Deliberately broad: this runs in a supervisor thread, and an exception that
@@ -88,8 +90,9 @@ def predict(payload: PredictRequest, request: Request) -> PredictResponse:
 
     loaded = state.model
     frame = coerce([record.model_dump() for record in payload.records], loaded.dtypes)
-    predictions = loaded.pyfunc.predict(frame)
+    predictions = [float(value) for value in loaded.pyfunc.predict(frame)]
+    observe_predictions(predictions)
     return PredictResponse(
-        predictions=[float(value) for value in predictions],
+        predictions=predictions,
         model=ModelInfo(name=loaded.name, version=loaded.version, run_id=loaded.run_id),
     )
