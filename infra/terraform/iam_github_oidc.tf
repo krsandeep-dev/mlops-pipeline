@@ -8,6 +8,14 @@ resource "aws_iam_openid_connect_provider" "github" {
   thumbprint_list = [data.tls_certificate.github.certificates[0].sha1_fingerprint]
 }
 
+locals {
+  github_owner = split("/", var.github_repo)[0]
+  github_name  = split("/", var.github_repo)[1]
+
+  # The owner/repo portion of the OIDC subject claim, in GitHub's immutable ID form.
+  oidc_subject_repo = "${local.github_owner}@${var.github_owner_id}/${local.github_name}@${var.github_repo_id}"
+}
+
 data "aws_iam_policy_document" "github_assume_role" {
   statement {
     effect  = "Allow"
@@ -24,20 +32,26 @@ data "aws_iam_policy_document" "github_assume_role" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Pinned to the refs the ECR workflow actually presents, never a wildcard. The
-    # previous "repo:<owner>/<repo>:*" also matched "repo:<owner>/<repo>:pull_request",
-    # which is the subject a fork's pull request presents -- harmless while the repo is
-    # private, a real hole the moment it is public. StringLike is kept because the tag
-    # pattern needs the glob; both values are otherwise exact.
+    # GitHub issues IMMUTABLE subject claims here: the sub embeds the numeric owner and
+    # repository IDs, so trust cannot be inherited by a renamed repo, or by someone who
+    # re-registers the name after a delete. Measured from a real token on 2026-09-11:
     #
-    #   refs/tags/v*   release-ecr on a version tag
+    #   repo:krsandeep-dev@190084059/mlops-pipeline@1338539854:ref:refs/heads/main
+    #
+    # The name-only form never matched that, which is why this role had never actually
+    # been assumable -- neither the original "repo:<owner>/<repo>:*" wildcard nor the
+    # name-only refs that replaced it. Nothing exercised the role until Phase 4's N3, so
+    # the breakage sat undetected from Phase 1.4 onward. StringLike is kept for the tag
+    # glob; everything left of ":ref:" is now exact.
+    #
+    #   refs/tags/v*     release-ecr on a version tag
     #   refs/heads/main  the same workflow via workflow_dispatch
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:${var.github_repo}:ref:refs/tags/v*",
-        "repo:${var.github_repo}:ref:refs/heads/main",
+        "repo:${local.oidc_subject_repo}:ref:refs/tags/v*",
+        "repo:${local.oidc_subject_repo}:ref:refs/heads/main",
       ]
     }
   }
