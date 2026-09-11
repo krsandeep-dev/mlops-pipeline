@@ -123,7 +123,7 @@ The AWS layer is deliberately minimal and fully described in `infra/terraform/`:
 | Resource | Purpose | Cost when idle |
 | --- | --- | --- |
 | S3 bucket | DVC remote | ~$0.02/GB-month, lifecycle rules cap growth |
-| ECR repository | Inference API images | ~$0.10/GB-month, last 3 images retained |
+| ECR repository | Inference API images | ~$0.10/GB-month, last 6 images retained (three releases) |
 | GitHub OIDC provider + IAM role | Keyless CI authentication | free |
 
 No always-on compute is provisioned. The ECS Fargate demo in Phase 6 is applied and
@@ -172,8 +172,8 @@ configuration is at fault.
 | 1 | Local infra: Compose stack (MinIO, Postgres, MLflow, Airflow), Terraform, DVC, ingestion DAG | ✅ complete |
 | 2 | Preprocess/train DAGs, MLflow tracking, model registry | ✅ complete |
 | 3 | FastAPI serving on k3d, multi-stage Docker build, tests | ✅ complete |
-| 4 | CI/CD with GitHub Actions | 🔨 in progress |
-| 5 | Drift detection + automated retraining loop | planned |
+| 4 | CI/CD with GitHub Actions | ✅ complete |
+| 5 | Drift detection + automated retraining loop | 🔨 in progress |
 | 6 | Hardening: secrets, IAM, security checklist, cost audit | planned |
 | 7 | ArgoCD GitOps | planned |
 
@@ -251,7 +251,7 @@ multi-arch manifest (linux/amd64 + linux/arm64), public, and pullable with no cr
 docker pull ghcr.io/krsandeep-dev/mlops-serving:$(grep -E '^  tag:' charts/model-serving/values.yaml | tr -d ' "' | cut -d: -f2)
 ```
 
-### CI/CD (Phase 4, in progress)
+### CI/CD (Phase 4, complete)
 
 [![CI](https://github.com/krsandeep-dev/mlops-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/krsandeep-dev/mlops-pipeline/actions/workflows/ci.yml)
 
@@ -283,6 +283,22 @@ signature produces no diff. Refresh it with `make export-signature`.
 workarounds — a tunnel, an exposed API server, a self-hosted runner holding cluster
 credentials — are all worse than the gap. The pipeline stops at a committed tag. That gap
 is the argument for Phase 7's GitOps, not an obstacle to it.
+
+**Cutting a release** pushes a `v*` tag, which triggers `release-ecr.yml`. It does not
+rebuild — it reads `image.tag` out of the chart at the tagged commit (the SHA already
+built, pushed to GHCR, and proven on the cluster), resolves that manifest list's
+`linux/amd64` child by digest, and copies exactly those bytes into ECR:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+If the GHCR image for that commit doesn't exist, the workflow fails before it ever touches
+AWS rather than falling back to a rebuild. `workflow_dispatch` is the manual equivalent and
+takes an explicit `tag` input, since `github.ref_name` on a dispatch from `main` is
+literally `"main"` — not a version — and the ECR repository is `IMMUTABLE`, so that name
+would be burned on first use.
 
 ### Trigger the training DAG over the REST API
 
