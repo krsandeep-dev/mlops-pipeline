@@ -107,8 +107,13 @@ jobs:
 
           { echo "### copied"; echo "- source: \`$SRC\` @ \`$DIGEST\`"; echo "- target: \`$DST\`"; } >> "$GITHUB_STEP_SUMMARY"
 
+      # set -o pipefail, because this is piped to tee: without it the pipeline returns
+      # tee's exit code and an AccessDenied from AWS reads as a passing step. That is
+      # exactly how the missing ecr:DescribeImages permission stayed invisible in a
+      # green run.
       - name: Report stored size and lifecycle position
         run: |
+          set -o pipefail
           aws ecr describe-images --repository-name ${{ env.ECR_REPOSITORY }} \
             --query 'reverse(sort_by(imageDetails,&imagePushedAt))[].{tag:imageTags[0],mb:imageSizeInBytes,pushed:imagePushedAt}' \
             --output table | tee /tmp/ecr.txt

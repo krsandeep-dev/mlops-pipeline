@@ -81,6 +81,11 @@ data "aws_iam_policy_document" "ci_permissions" {
       "ecr:UploadLayerPart",
       "ecr:BatchGetImage",
       "ecr:GetDownloadUrlForLayer",
+      # The workflow reports stored size and lifecycle position after a copy. Without
+      # this it got AccessDenied -- and the run still went green, because the reporting
+      # command was piped and the pipeline returned tee's exit code. The pipe is fixed
+      # in the workflow; this is the permission it needed all along.
+      "ecr:DescribeImages",
     ]
     resources = [aws_ecr_repository.api.arn]
   }
