@@ -16,6 +16,11 @@ prometheus-pushgateway:
     limits:   {cpu: 200m, memory: 128Mi}
 
 server:
+  # 30s, not the 1m default: the dashboard refreshes every 10s, and at a 1m interval a
+  # short rate() window holds a single sample and renders nothing. Cheap at this series
+  # count.
+  global:
+    scrape_interval: 30s
   retention: 7d
   persistentVolume:
     enabled: false          # local demo; losing history on restart is acceptable

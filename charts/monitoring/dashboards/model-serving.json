@@ -1,0 +1,192 @@
+{
+  "title": "Model Serving",
+  "uid": "model-serving",
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Champion served",
+      "id": 1,
+      "gridPos": {
+        "h": 4,
+        "w": 10,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "name",
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "expr": "model_info",
+          "legendFormat": "v{{version}} \u00b7 run {{run_id}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Model loaded",
+      "id": 2,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 10,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso"
+        }
+      },
+      "targets": [
+        {
+          "expr": "model_loaded_timestamp_seconds * 1000",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Reload failures",
+      "id": 3,
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(model_reload_total{result=\"failure\"}) or vector(0)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Request rate by status",
+      "id": 4,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(http_requests_total[5m]))",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ],
+      "description": "Rate window is 5m, not 1m: at a 1m scrape interval a 1m window holds a single sample and rate() needs two, so the panel silently showed no data."
+    },
+    {
+      "type": "timeseries",
+      "title": "Request latency p50 / p95",
+      "id": 5,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Predicted duration p50 / p95 (minutes)",
+      "id": 6,
+      "description": "The distribution the retraining loop is expected to shift. A step change here after a promotion is the model changing its mind, not traffic changing.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(prediction_duration_minutes_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(prediction_duration_minutes_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Batch drift share by month (Pushgateway)",
+      "id": 7,
+      "description": "Pushed per DAG run. Series persist until deleted -- stale months are a Pushgateway hazard, not a signal.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "targets": [
+        {
+          "expr": "drift_share",
+          "legendFormat": "{{month}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

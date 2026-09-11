@@ -3,9 +3,13 @@
 adminPassword: admin          # local only; not reachable off this machine
 persistence:
   enabled: false
+# Measured: anon 80 MiB, but memory.current sat at 255 MiB against a 256 MiB limit --
+# page cache expanding to fill the cgroup. Not an imminent OOM (zero restarts), but running
+# at the ceiling means constant reclaim, so the limit is set from the anon working set with
+# real headroom rather than from the number the cgroup happened to report.
 resources:
   requests: {cpu: 50m, memory: 128Mi}
-  limits:   {cpu: 500m, memory: 256Mi}
+  limits:   {cpu: 500m, memory: 512Mi}
 
 datasources:
   datasources.yaml:
@@ -16,6 +20,25 @@ datasources:
         url: http://monitoring-prometheus-server.monitoring.svc.cluster.local
         access: proxy
         isDefault: true
+
+# Provisioned from charts/monitoring/dashboards/, loaded by `make monitoring-up` into a
+# ConfigMap the sidecar picks up. A dashboard edited in the browser and not committed is
+# lost on the next uninstall, which is why this phase treats them as code.
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: repo
+        orgId: 1
+        folder: ""
+        type: file
+        disableDeletion: true
+        editable: false
+        options:
+          path: /var/lib/grafana/dashboards/repo
+
+dashboardsConfigMaps:
+  repo: grafana-dashboards-repo
 
 ingress:
   enabled: true

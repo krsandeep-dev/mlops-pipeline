@@ -36,7 +36,8 @@ TAG         ?= $(if $(STAMPED_TAG),$(STAMPED_TAG),$(GIT_SHA))
         cluster-up cluster-start cluster-stop cluster-down cluster-info \
         coredns-refresh m2-dns m2-verify image-import signature-check \
         m3-verify export-signature helm-sync \
-        helm-lint helm-template helm-install helm-uninstall
+        helm-lint helm-template helm-install helm-uninstall \
+        monitoring-up monitoring-down monitoring-reach
 
 help:  ## List targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -216,3 +217,45 @@ helm-sync:  ## Deploy the tag committed in values.yaml (pulls from GHCR)
 
 helm-uninstall:  ## Remove the release
 	-helm uninstall $(RELEASE) --namespace $(NAMESPACE)
+
+# ---------------------------------------------------------------- Phase 5: monitoring
+
+MONITORING_NS ?= monitoring
+
+# Plain prometheus + grafana, not kube-prometheus-stack: the VM has ~3.3 GiB free and the
+# stack lands at ~580 MiB measured, where kube-prometheus-stack would want 2-3 GiB for an
+# operator, Alertmanager and exporters this phase does not use.
+monitoring-up:  ## Install Prometheus + Pushgateway + Grafana with provisioned dashboards
+	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null
+	helm repo add grafana https://grafana.github.io/helm-charts >/dev/null
+	helm repo update >/dev/null
+	helm upgrade --install monitoring prometheus-community/prometheus --version 27.52.0 \
+	  --namespace $(MONITORING_NS) --create-namespace \
+	  -f charts/monitoring/values/prometheus.yaml --wait --timeout 8m
+	kubectl -n $(MONITORING_NS) create configmap grafana-dashboards-repo \
+	  --from-file=charts/monitoring/dashboards/ --dry-run=client -o yaml | kubectl apply -f -
+	helm upgrade --install grafana grafana/grafana --version 10.5.15 \
+	  --namespace $(MONITORING_NS) -f charts/monitoring/values/grafana.yaml --wait --timeout 8m
+	kubectl apply -f charts/monitoring/pushgateway-ingress.yaml
+	@echo "Grafana: http://grafana.localhost:8081 (admin/admin)  Pushgateway: http://pushgateway.localhost:8081"
+
+monitoring-down:  ## Remove the monitoring stack
+	-helm uninstall grafana -n $(MONITORING_NS)
+	-helm uninstall monitoring -n $(MONITORING_NS)
+
+# Airflow reaches the cluster by CONTAINER NAME on port 80, not host.k3d.internal (which
+# does not resolve from Compose) and not host port 8081. Both sit on the Compose network,
+# which is the Phase 3 mechanism-A decision still paying off.
+monitoring-reach:  ## Prove Airflow -> Pushgateway: push, read, delete
+	docker compose exec -T airflow-scheduler python -c "\
+import urllib.request, socket; socket.setdefaulttimeout(10); \
+req = urllib.request.Request('http://k3d-mlops-serverlb/metrics/job/reach_test', \
+  data=b'reach_test 1\n', method='POST', headers={'Host': 'pushgateway.localhost'}); \
+print('push HTTP', urllib.request.urlopen(req).status)"
+	curl -s http://pushgateway.localhost:8081/metrics | grep '^reach_test'
+	docker compose exec -T airflow-scheduler python -c "\
+import urllib.request, socket; socket.setdefaulttimeout(10); \
+req = urllib.request.Request('http://k3d-mlops-serverlb/metrics/job/reach_test', \
+  method='DELETE', headers={'Host': 'pushgateway.localhost'}); \
+print('delete HTTP', urllib.request.urlopen(req).status)"
+	@echo "round trip OK"
