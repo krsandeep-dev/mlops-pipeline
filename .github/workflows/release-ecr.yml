@@ -32,6 +32,15 @@ permissions:
   contents: read
   packages: read
 
+# GitHub's implicit shell for `run` is `bash -e {0}` -- no pipefail -- so any step that
+# pipes gets the exit code of the LAST command in the pipeline. An AccessDenied from aws
+# piped into tee reads as a passing step, which is exactly how a missing IAM permission
+# survived a green run here. Declaring `shell: bash` switches it to `bash -eo pipefail`,
+# so every pipe in every step of this workflow fails on the first failing command.
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: release-ecr-${{ github.ref }}
   cancel-in-progress: false
@@ -51,7 +60,11 @@ jobs:
       - name: Read the deployed tag from the chart
         id: tag
         run: |
-          TAG=$(grep -E '^  tag:' charts/model-serving/values.yaml | sed -E 's/^  tag: *"?([^"]*)"?/\1/')
+          # `|| true` on purpose, now that shell: bash brings -eo pipefail: a missing tag
+          # would otherwise abort here on grep's exit 1, before the check below could say
+          # what is actually wrong. Failing soft preserves the diagnosis; the check still
+          # exits 1.
+          TAG=$(grep -E '^  tag:' charts/model-serving/values.yaml | sed -E 's/^  tag: *"?([^"]*)"?/\1/' || true)
           if [ -z "$TAG" ]; then
             echo "FAIL: charts/model-serving/values.yaml has no image.tag."
             echo "      Nothing has been released to GHCR yet, so there is nothing to copy."
@@ -95,8 +108,10 @@ jobs:
 
           # Resolve the amd64 child digest out of the manifest list, so what lands in ECR
           # is byte-identical to what was verified, not a re-resolution of a floating tag.
+          # Same reasoning as the tag read: fail soft so the explicit check reports the
+          # real problem rather than the pipeline aborting on a bare non-zero exit.
           DIGEST=$(docker buildx imagetools inspect "$SRC" --raw \
-            | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="amd64") | .digest')
+            | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="amd64") | .digest' || true)
           if [ -z "$DIGEST" ] || [ "$DIGEST" = "null" ]; then
             echo "FAIL: no linux/amd64 manifest in $SRC"; exit 1
           fi
@@ -107,13 +122,8 @@ jobs:
 
           { echo "### copied"; echo "- source: \`$SRC\` @ \`$DIGEST\`"; echo "- target: \`$DST\`"; } >> "$GITHUB_STEP_SUMMARY"
 
-      # set -o pipefail, because this is piped to tee: without it the pipeline returns
-      # tee's exit code and an AccessDenied from AWS reads as a passing step. That is
-      # exactly how the missing ecr:DescribeImages permission stayed invisible in a
-      # green run.
       - name: Report stored size and lifecycle position
         run: |
-          set -o pipefail
           aws ecr describe-images --repository-name ${{ env.ECR_REPOSITORY }} \
             --query 'reverse(sort_by(imageDetails,&imagePushedAt))[].{tag:imageTags[0],mb:imageSizeInBytes,pushed:imagePushedAt}' \
             --output table | tee /tmp/ecr.txt

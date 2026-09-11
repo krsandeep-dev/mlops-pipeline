@@ -12,6 +12,15 @@ on:
 permissions:
   contents: read
 
+# GitHub's implicit shell for `run` is `bash -e {0}` -- no pipefail -- so any step that
+# pipes gets the exit code of the LAST command in the pipeline. An AccessDenied from aws
+# piped into tee reads as a passing step, which is exactly how a missing IAM permission
+# survived a green run here. Declaring `shell: bash` switches it to `bash -eo pipefail`,
+# so every pipe in every step of this workflow fails on the first failing command.
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

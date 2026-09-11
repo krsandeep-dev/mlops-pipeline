@@ -17,15 +17,17 @@ resource "aws_ecr_lifecycle_policy" "api" {
   policy = jsonencode({
     rules = [{
       rulePriority = 1
-      description  = "Keep only the 3 most recent images"
+      description  = "Keep only the 6 most recent images (3 releases)"
       selection = {
         tagStatus = "any"
         countType = "imageCountMoreThan"
-        # 3, not 10: the serving image is ~1.4 GB, and ECR bills per GB beyond a 500 MB
-        # free tier that expires after 12 months. Ten versions would be ~14 GB standing
-        # against a project rule of near-zero cloud cost, for images whose only consumer
-        # is a Phase 6 demo that is torn down the same session.
-        countNumber = 3
+        # Counted in IMAGES, not releases, and each release lands two entries: the tagged
+        # OCI index and the untagged amd64 manifest it points at. At 3 this retained one
+        # and a half releases, so the second release would have evicted half of the
+        # first, leaving a tag whose child manifest was gone. 6 keeps three whole
+        # releases. Still bounded, because the image is ~293 MB pushed and ECR bills per
+        # GB past a 500 MB free tier that expires after 12 months.
+        countNumber = 6
       }
       action = { type = "expire" }
     }]
