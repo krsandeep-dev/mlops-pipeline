@@ -9,12 +9,21 @@
 #
 # amd64 only: ECR exists to feed the Phase 6 Fargate demo, which is amd64. Copying arm64
 # too would double stored bytes for something nothing pulls, against a 3-image lifecycle.
+# workflow_dispatch takes an explicit tag rather than falling back to the branch name.
+# github.ref_name on a dispatch from main is literally "main", and the ECR repository is
+# IMMUTABLE, so that name would be burned permanently on first use and the dispatch path
+# could never run twice. A version is required input instead.
 name: Release to ECR
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to publish to ECR, e.g. v0.1.0"
+        required: true
+        type: string
 
 # id-token for OIDC; packages:read to pull the source image from GHCR. No contents:write:
 # this workflow publishes nothing back to the repository.
@@ -82,7 +91,7 @@ jobs:
           ECR: ${{ steps.ecr.outputs.registry }}
         run: |
           SRC=${{ env.GHCR_IMAGE }}:${{ steps.tag.outputs.tag }}
-          DST=$ECR/${{ env.ECR_REPOSITORY }}:${{ github.ref_name }}
+          DST=$ECR/${{ env.ECR_REPOSITORY }}:${{ inputs.tag || github.ref_name }}
 
           # Resolve the amd64 child digest out of the manifest list, so what lands in ECR
           # is byte-identical to what was verified, not a re-resolution of a floating tag.
