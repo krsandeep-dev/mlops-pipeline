@@ -142,15 +142,28 @@ ECR repository, and one S3 bucket, and its trust policy pins the `sub` claim to 
 refs that may assume it:
 
 ```
-repo:krsandeep-dev/mlops-pipeline:ref:refs/tags/v*
-repo:krsandeep-dev/mlops-pipeline:ref:refs/heads/main
+repo:krsandeep-dev@190084059/mlops-pipeline@1338539854:ref:refs/tags/v*
+repo:krsandeep-dev@190084059/mlops-pipeline@1338539854:ref:refs/heads/main
 ```
 
-That matters more than it looks. The original condition was `repo:<owner>/<repo>:*`, which
-also matches `repo:<owner>/<repo>:pull_request` — the subject a fork's pull request
-presents. Harmless while the repository was private; a real hole the moment it went
-public. Only three images are retained because the serving image is ~1.4 GB and the
-project's rule is near-zero cloud cost.
+Those numeric IDs are not decoration. GitHub issues **immutable subject claims** here: the
+`sub` embeds the owner and repository IDs, so trust cannot be inherited by a renamed
+repository or by someone who re-registers the name after a delete. No name-only pattern
+matches it — which is why the original `repo:<owner>/<repo>:*` had never actually been
+assumable, and nobody noticed until the first release tag tried to use it. That wildcard
+was also a real hole in its own right: it matches `repo:<owner>/<repo>:pull_request`, the
+subject a fork's pull request presents.
+
+Six images are retained, not ten. ECR counts *images*, and each release lands two — the
+tagged OCI index plus the untagged `amd64` manifest beneath it — so six is three whole
+releases. The serving image is ~293 MB pushed, and the project's rule is near-zero cloud
+cost.
+
+**Terraform needs credentials for the account that owns the state.** This is a live trap,
+not a hypothetical: an `aws configure` default pointing at a different account makes every
+`terraform plan` fail with a wall of 403s that reads like broken permissions rather than
+the wrong identity. Check with `aws sts get-caller-identity` before assuming the
+configuration is at fault.
 
 ## Roadmap
 
@@ -221,6 +234,13 @@ make helm-sync         # deploy the COMMITTED tag from values.yaml, pulled from 
 make m3-verify         # assert the contract through the Traefik ingress from the host
 make helm-uninstall
 ```
+
+**The chart defaults to a published GHCR image, so a fresh clone deploys without building
+anything.** `charts/model-serving/values.yaml` carries the tag CI last released, and
+`make helm-sync` deploys exactly that — no local build, no `k3d image import`, no pull
+secret. `make image` + `make helm-install` remains the local-build path for when you are
+changing the serving code itself; the two share one repository string so
+`imagePullPolicy: IfNotPresent` serves both.
 
 The serving image is published to
 [GHCR](https://github.com/krsandeep-dev/mlops-pipeline/pkgs/container/mlops-serving) as a
