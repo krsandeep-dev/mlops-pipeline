@@ -5,6 +5,7 @@ __pycache__/
 mlruns/
 .terraform/
 *.tfstate*
+docs/
 docs/learning/
 .DS_Store
 logs/
