@@ -1,6 +1,6 @@
 # Phase 4 Spec — CI/CD: GitHub Actions, multi-arch images, tag-bump handoff
 
-**Input state:** Phase 3 closed (commit `459c389`). Serving runs as a Helm release on k3d; the chart requires an explicit `image.tag` supplied by `make helm-install` from the `.image-tag` stamp. 23 tests pass, 1 skips (the in-network signature check). Image is ~1.4 GB, built locally and loaded via `k3d image import`.
+**Input state:** Phase 3 closed (commit `8b44866`). Serving runs as a Helm release on k3d; the chart requires an explicit `image.tag` supplied by `make helm-install` from the `.image-tag` stamp. 23 tests pass, 1 skips (the in-network signature check). Image is ~1.4 GB, built locally and loaded via `k3d image import`.
 
 ## 1. Objective
 
@@ -8,7 +8,7 @@ A GitHub Actions pipeline that lints, tests, builds a multi-arch image, pushes i
 
 ## 2. Decisions already made — plan within these
 
-1. **Helm is the single source of truth.** Delete `k8s/` (Deployment, Service, Ingress, ConfigMap, Namespace, kustomization) and the `set image` scaffolding in `m3-deploy`. Git history is the archive; one README line points at `459c389` for the pre-chart manifests. Two definitions of one deployment guarantees drift once ArgoCD syncs the chart.
+1. **Helm is the single source of truth.** Delete `k8s/` (Deployment, Service, Ingress, ConfigMap, Namespace, kustomization) and the `set image` scaffolding in `m3-deploy`. Git history is the archive; one README line points at `8b44866` for the pre-chart manifests. Two definitions of one deployment guarantees drift once ArgoCD syncs the chart.
 2. **Both registries, different consumers and different triggers.** GHCR is the pull source for k3d and for anyone reading the repo — public packages need no pull secret. ECR exercises the OIDC role built in Phase 1.4 and feeds the Phase 6 Fargate demo. See §5 for why their triggers differ.
 3. **GitHub-hosted runners.** Self-hosted CI runs only when the laptop is awake and shows stale or red to a reviewer; fork-PR execution on self-hosted runners is a real security footgun. Docker Hub pull limits do not apply to hosted runners pulling public images, so the `python:3.11-slim` base needs no login or mirror.
 4. **CI stops at push + tag bump. No deploy from CI.** A hosted runner cannot reach a cluster on the laptop, and the workarounds (tunnel, exposed API server, self-hosted runner holding cluster credentials) are all worse than the gap. Push-based CD requires CI to hold cluster credentials and network reach; pull-based CD inverts that. This gap is the argument for Phase 7, not an obstacle to it.

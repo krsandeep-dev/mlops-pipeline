@@ -198,7 +198,7 @@ result. A prediction-visible promotion needs Phase 5's drift data.
 
 The Helm chart is the only definition of the deployment. The raw Kubernetes manifests
 that preceded it were deleted once the chart reproduced them; they are in git history at
-`459c389` (`k8s/`) if you want to compare the two forms. Keeping both would have
+`8b44866` (`k8s/`) if you want to compare the two forms. Keeping both would have
 guaranteed drift the moment ArgoCD started syncing the chart.
 
 `make help` lists the targets. All four milestones are green: M1 the app on the Compose
