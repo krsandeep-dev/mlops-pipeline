@@ -13,3 +13,8 @@ pyarrow==25.0.0
 # narwhals are already pinned by the 3.11 constraints at the versions uv.lock
 # holds, so only lightgbm needs an explicit pin.
 lightgbm==4.7.0
+
+# Batch drift. Resolves cleanly inside Airflow's own constraints -- it is not pinned there
+# at all, and it moves nothing: numpy, scipy, scikit-learn and pandas all stay where the
+# image already had them. The spec's fallback to an isolated image is not needed.
+evidently==0.7.23

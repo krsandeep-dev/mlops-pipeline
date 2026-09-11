@@ -1,0 +1,5 @@
+outs:
+- md5: 2c1a38f4f0c2b1bcd8819806ce839076
+  size: 48361828
+  hash: md5
+  path: yellow_tripdata_2023-07.parquet

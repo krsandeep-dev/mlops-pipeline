@@ -23,6 +23,7 @@ packages = ["src/mlops_pipeline"]
 
 [dependency-groups]
 dev = [
+    "evidently==0.7.23",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
     "prometheus-fastapi-instrumentator>=8.1.0",
