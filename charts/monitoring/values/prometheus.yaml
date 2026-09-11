@@ -1,0 +1,41 @@
+# Plain prometheus, not kube-prometheus-stack. The Docker Desktop VM is 7.7 GiB total and
+# already holds the Compose stack (MLflow alone ~1.8 GiB) plus the k3d nodes, leaving about
+# 3.3 GiB. kube-prometheus-stack brings an operator, Alertmanager, node-exporter and
+# kube-state-metrics for ~2-3 GiB, which would risk OOM-ing the thing being monitored.
+# Alertmanager is out of scope for this phase anyway (spec section 8).
+alertmanager:
+  enabled: false
+prometheus-node-exporter:
+  enabled: false
+kube-state-metrics:
+  enabled: false
+prometheus-pushgateway:
+  enabled: true
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits:   {cpu: 200m, memory: 128Mi}
+
+server:
+  retention: 7d
+  persistentVolume:
+    enabled: false          # local demo; losing history on restart is acceptable
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits:   {cpu: "1", memory: 768Mi}
+
+# The serving Service is discovered in-cluster. Prometheus scrapes it directly rather
+# than through the ingress, because the presigned-style Host-header trick the Airflow
+# side needs is not expressible in a scrape config.
+extraScrapeConfigs: |
+  - job_name: model-serving
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names: [serving]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name]
+        action: keep
+        regex: model-serving
+      - source_labels: [__meta_kubernetes_endpoint_port_name]
+        action: keep
+        regex: http

@@ -21,3 +21,7 @@ fastapi==0.141.1
 uvicorn==0.52.3
 pydantic-settings==2.15.0
 prometheus-fastapi-instrumentator==8.1.0
+# Imported directly by serving/app/metrics.py, so pinned rather than left to arrive as a
+# transitive of the instrumentator -- a direct import on an unpinned version is how a
+# silent upgrade breaks a running image.
+prometheus-client==0.26.0

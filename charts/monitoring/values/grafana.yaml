@@ -1,0 +1,23 @@
+# Dashboards and datasources are provisioned from this repo, never click-ops: a dashboard
+# that exists only in a browser is lost on the next `helm uninstall`.
+adminPassword: admin          # local only; not reachable off this machine
+persistence:
+  enabled: false
+resources:
+  requests: {cpu: 50m, memory: 128Mi}
+  limits:   {cpu: 500m, memory: 256Mi}
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://monitoring-prometheus-server.monitoring.svc.cluster.local
+        access: proxy
+        isDefault: true
+
+ingress:
+  enabled: true
+  ingressClassName: traefik
+  hosts: [grafana.localhost]
