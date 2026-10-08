@@ -22,10 +22,12 @@ from airflow.sdk import dag, task
 )
 def train_and_promote():
     @task
-    def train_candidate() -> dict:
+    def train_candidate(**context) -> dict:
         from mlops_pipeline import train
 
-        return asdict(train.main())
+        month = (context["dag_run"].conf or {}).get("month", train.DEFAULT_MONTH)
+        print(f"training on month={month}")
+        return asdict(train.main(month))
 
     @task(retries=0)
     def register(result: dict) -> str:
@@ -37,7 +39,7 @@ def train_and_promote():
         )
 
     @task
-    def evaluate_champion() -> dict | None:
+    def evaluate_champion(**context) -> dict | None:
         from mlops_pipeline import registry, train
         from mlops_pipeline.features import build_features
 
@@ -47,10 +49,14 @@ def train_and_promote():
             print("no champion registered; candidate will bootstrap")
             return None
 
-        _, valid_df = train.load_splits()
+        # The SAME month the candidate trains on, so both are scored on identical rows.
+        # This is the Phase 5 correction: previously both were scored on 2023-01 forever,
+        # which is exactly the set that cannot reveal degradation on current data.
+        month = (context["dag_run"].conf or {}).get("month", train.DEFAULT_MONTH)
+        _, valid_df = train.load_splits(month)
         x_valid, y_valid, _ = build_features(valid_df)
         snapshot = registry.score_champion(version, x_valid, y_valid)
-        print(f"champion v{snapshot.version} scored {snapshot.mae:.4f} on this split")
+        print(f"champion v{snapshot.version} scored {snapshot.mae:.4f} on {month}'s holdout")
         return {"version": snapshot.version, "mae": snapshot.mae}
 
     @task(retries=0)

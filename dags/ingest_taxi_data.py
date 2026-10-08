@@ -8,8 +8,15 @@ from datetime import UTC, datetime
 from airflow.sdk import dag, task
 
 DVC_REPO = "/opt/airflow/repo"
-DATA_PATH = "data/raw/yellow_tripdata_2023-01.parquet"
-LANDING_URI = "s3://landing/reference/yellow_tripdata_2023-01_sample.parquet"
+DEFAULT_MONTH = "2023-01"
+
+
+def data_path(month: str) -> str:
+    return f"data/raw/yellow_tripdata_{month}.parquet"
+
+
+def landing_uri(month: str) -> str:
+    return f"s3://landing/reference/yellow_tripdata_{month}_sample.parquet"
 
 
 def _storage_options() -> dict:
@@ -29,20 +36,20 @@ def _storage_options() -> dict:
 )
 def ingest_taxi_data():
     @task
-    def resolve_dataset() -> str:
+    def resolve_dataset(**context) -> str:
         import dvc.api
 
-        url = dvc.api.get_url(DATA_PATH, repo=DVC_REPO, remote="minio-docker")
-        print(f"Resolved {DATA_PATH} -> {url}")
+        month = (context["dag_run"].conf or {}).get("month", DEFAULT_MONTH)
+        path = data_path(month)
+        url = dvc.api.get_url(path, repo=DVC_REPO, remote="minio-docker")
+        print(f"month={month}  resolved {path} -> {url}")
         return url
 
     @task
     def validate(url: str) -> dict:
-        import pandas as pd
+        from mlops_pipeline.data import read_raw, validate_raw
 
-        from mlops_pipeline.data import validate_raw
-
-        df = pd.read_parquet(url, storage_options=_storage_options())
+        df = read_raw(url, storage_options=_storage_options())
         report = validate_raw(df)
         print(
             f"rows={report.row_count} cols={report.column_count} "
@@ -51,24 +58,28 @@ def ingest_taxi_data():
         return {"row_count": report.row_count}
 
     @task
-    def write_reference_sample(url: str, _validation: dict) -> str:
-        import pandas as pd
+    def write_reference_sample(url: str, _validation: dict, **context) -> str:
+        import gc
 
-        from mlops_pipeline.data import build_reference_sample, clean_raw
+        from mlops_pipeline.data import build_reference_sample, clean_raw, read_raw
 
-        df = pd.read_parquet(url, storage_options=_storage_options())
+        df = read_raw(url, storage_options=_storage_options())
         cleaned, cleaning = clean_raw(df)
+        # clean_raw holds the input and its cleaned copy at once; dropping our reference
+        # lets the input be collected before the 200k sample is drawn.
+        del df
+        gc.collect()
         print(
             f"cleaning: dropped {cleaning.dropped_non_positive_duration} of "
             f"{cleaning.input_rows} rows ({cleaning.drop_fraction:.4%}) for "
             f"non-positive duration"
         )
         sample = build_reference_sample(cleaned)
-        sample.to_parquet(
-            LANDING_URI, index=False, storage_options=_storage_options()
-        )
-        print(f"Wrote {len(sample)} rows to {LANDING_URI}")
-        return LANDING_URI
+        month = (context["dag_run"].conf or {}).get("month", DEFAULT_MONTH)
+        target = landing_uri(month)
+        sample.to_parquet(target, index=False, storage_options=_storage_options())
+        print(f"Wrote {len(sample)} rows to {target}")
+        return target
 
     resolved = resolve_dataset()
     validation = validate(resolved)

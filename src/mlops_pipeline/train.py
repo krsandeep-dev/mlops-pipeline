@@ -21,8 +21,20 @@ from mlops_pipeline.features import (
 )
 
 EXPERIMENT_NAME = "taxi-trip-duration"
-REFERENCE_URI = "s3://landing/reference/yellow_tripdata_2023-01_sample.parquet"
-DATA_PATH = "data/raw/yellow_tripdata_2023-01.parquet"
+
+# The month the champion was trained on, and the default for everything here. Phase 5
+# retrains on later months, so the window is a parameter rather than two constants --
+# but it still defaults to the baseline month, so every pre-Phase-5 call site behaves
+# exactly as it did.
+DEFAULT_MONTH = "2023-01"
+
+
+def reference_uri(month: str = DEFAULT_MONTH) -> str:
+    return f"s3://landing/reference/yellow_tripdata_{month}_sample.parquet"
+
+
+def data_path(month: str = DEFAULT_MONTH) -> str:
+    return f"data/raw/yellow_tripdata_{month}.parquet"
 
 MODEL_PARAMS = {
     "objective": "regression_l1",
@@ -43,12 +55,14 @@ def storage_options() -> dict:
     }
 
 
-def dataset_url() -> str:
+def dataset_url(month: str = DEFAULT_MONTH) -> str:
     """Content-addressed URL of the raw dataset this model derives from."""
     import dvc.api
 
     remote = os.environ.get("DVC_REMOTE", "minio")
-    return dvc.api.get_url(DATA_PATH, repo=os.environ.get("DVC_REPO", "."), remote=remote)
+    return dvc.api.get_url(
+        data_path(month), repo=os.environ.get("DVC_REPO", "."), remote=remote
+    )
 
 
 def evaluate(y_true: pd.Series, y_pred: np.ndarray) -> dict[str, float]:
@@ -68,9 +82,14 @@ class TrainingResult:
     data_url: str
 
 
-def load_splits() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Reference sample, split temporally. Shared by training and the promotion gate."""
-    reference = pd.read_parquet(REFERENCE_URI, storage_options=storage_options())
+def load_splits(month: str = DEFAULT_MONTH) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """A month's sample, split temporally. Shared by training and the promotion gate.
+
+    The gate scores champion and candidate on the *same* rows, so whichever month is
+    passed here defines the holdout both are judged on. Under drift that is the whole
+    point: comparing stored MAEs from different months measures nothing.
+    """
+    reference = pd.read_parquet(reference_uri(month), storage_options=storage_options())
     return temporal_split(reference)
 
 
@@ -100,16 +119,20 @@ def verify_pyfunc_round_trip(
         )
 
 
-def main() -> TrainingResult:
+def main(month: str = DEFAULT_MONTH) -> TrainingResult:
     configure_tracking()
-    train_df, valid_df = load_splits()
+    train_df, valid_df = load_splits(month)
     x_train, y_train, prep = build_features(train_df)
     x_valid, y_valid, _ = build_features(valid_df)
 
-    data_url = dataset_url()
+    data_url = dataset_url(month)
     common_tags = {
         "data_url": data_url,
-        "reference_uri": REFERENCE_URI,
+        "reference_uri": reference_uri(month),
+        # Tagged explicitly so the drift reference can be derived from whichever run the
+        # champion alias points at, instead of being inferred from a pickup range or
+        # parsed back out of the URI. After a promotion the reference moves on its own.
+        "month": month,
         "split": "temporal",
         "train_pickup_range": (
             f"{train_df[PICKUP_COLUMN].min()} .. {train_df[PICKUP_COLUMN].max()}"
@@ -180,4 +203,6 @@ def main() -> TrainingResult:
 
 
 if __name__ == "__main__":
-    print(main())
+    import sys
+
+    print(main(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MONTH))

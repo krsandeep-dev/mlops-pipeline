@@ -20,6 +20,25 @@ MIN_EXPECTED_ROWS = 1_000_000
 MAX_DROP_FRACTION = 0.005
 
 
+def read_raw(source: str, storage_options: dict | None = None) -> pd.DataFrame:
+    """Read a raw monthly parquet, projecting to the columns anything downstream uses.
+
+    The source files carry 19 columns; REQUIRED_COLUMNS is 7 of them, and nothing past
+    this point reads the other 12 -- features derive from pickup time, the two location
+    ids and passenger count, duration comes from pickup and dropoff, and trip_distance
+    and fare_amount exist only to be validated and then excluded as leakage.
+
+    Projecting here is a memory bound, not a tidiness preference. Measured on 2023-12
+    (3.38M rows): reading all 19 columns peaks at 1,243 MiB and clean_raw's copy takes
+    that to 2,238 MiB, because the caller still holds the input frame while the cleaned
+    copy is built. Projected to 7 columns the same path peaks at 923 MiB. The unprojected
+    figure is what OOM-killed a four-month measurement loop on this 7.7 GiB VM, and an
+    OOM-killed Airflow task dies with no usable error -- exit 137 and nothing else.
+    """
+    return pd.read_parquet(source, columns=list(REQUIRED_COLUMNS),
+                           storage_options=storage_options)
+
+
 @dataclass(frozen=True)
 class ValidationReport:
     row_count: int

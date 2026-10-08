@@ -6,10 +6,13 @@ from mlops_pipeline import registry, train
 from mlops_pipeline.features import build_features
 
 
-def main() -> None:
-    result = train.main()
+def main(month: str = train.DEFAULT_MONTH) -> None:
+    result = train.main(month)
 
-    _, valid_df = train.load_splits()
+    # The same month the candidate trained on, so champion and candidate are scored on
+    # identical rows. Passing a different month here would silently compare two models
+    # on two datasets, which is the failure the gate exists to prevent.
+    _, valid_df = train.load_splits(month)
     x_valid, y_valid, _ = build_features(valid_df)
 
     mlflow_client = registry.client()
@@ -40,4 +43,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    main(sys.argv[1] if len(sys.argv) > 1 else train.DEFAULT_MONTH)

@@ -69,6 +69,24 @@ def _month_from_uri(uri: str) -> str:
     raise ValueError(f"cannot infer month from {uri!r}; tag the run with `month`")
 
 
+def _snapshot(reference: pd.DataFrame, current: pd.DataFrame):
+    """Build the Evidently snapshot. Shared by compute() and save_html()."""
+    from evidently import DataDefinition, Dataset, Report
+    from evidently.presets import DataDriftPreset
+
+    columns = list(FEATURE_COLUMNS)
+    definition = DataDefinition(numerical_columns=columns)
+    return Report(metrics=[DataDriftPreset()]).run(
+        Dataset.from_pandas(current[columns], data_definition=definition),
+        Dataset.from_pandas(reference[columns], data_definition=definition),
+    )
+
+
+def save_html(reference: pd.DataFrame, current: pd.DataFrame, path: str) -> None:
+    """Write the human-readable report MLflow keeps as the system of record."""
+    _snapshot(reference, current).save_html(path)
+
+
 def compute(reference: pd.DataFrame, current: pd.DataFrame, month: str,
             reference_month: str) -> DriftReport:
     """Feature drift over the model's actual inputs, nothing else.
@@ -76,16 +94,8 @@ def compute(reference: pd.DataFrame, current: pd.DataFrame, month: str,
     Restricted to FEATURE_COLUMNS on purpose: drift in a column the model never sees is
     not a reason to retrain, and including it would dilute drift_share with noise.
     """
-    from evidently import DataDefinition, Dataset, Report
-    from evidently.presets import DataDriftPreset
-
     columns = list(FEATURE_COLUMNS)
-    definition = DataDefinition(numerical_columns=columns)
-    ref_ds = Dataset.from_pandas(reference[columns], data_definition=definition)
-    cur_ds = Dataset.from_pandas(current[columns], data_definition=definition)
-
-    snapshot = Report(metrics=[DataDriftPreset()]).run(cur_ds, ref_ds)
-    result = json.loads(snapshot.json())
+    result = json.loads(_snapshot(reference, current).json())
 
     # Parsed from each metric's structured `config`, not from the rendered metric_name.
     # `metric_id` is None in this version, and matching on the display string would break
