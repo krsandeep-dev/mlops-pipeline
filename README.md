@@ -15,7 +15,8 @@ AWS with near-zero cloud spend.
 flowchart TB
     subgraph cicd["CI/CD + IaC"]
         GH["GitHub repo"] --> GA["GitHub Actions: ruff, pytest, build"]
-        GA --> ECR["ECR images"]
+        GA --> GHCR["GHCR images (amd64 + arm64)"]
+        GHCR -->|"v* tag: copy by digest"| ECR["ECR (amd64 copy)"]
         TF["Terraform: S3, ECR, IAM"]
     end
 
@@ -25,16 +26,18 @@ flowchart TB
         ING --> TR["Train + evaluate"]
         TR --> MLF["MLflow (Postgres + MinIO)"]
         MLF --> REG["Model registry"]
+        EVD["Evidently drift check"] -->|"drift detected or force_retrain"| TRIG["TriggerDagRunOperator"]
+        TRIG -.->|"retrain"| TR
     end
 
     subgraph k3d["k3d Kubernetes (local)"]
         API["FastAPI service"] --> PROM["Prometheus"]
+        PUSH["Pushgateway"] --> PROM
         PROM --> GRAF["Grafana"]
     end
 
-    REG --> API
-    EVD["Evidently drift check"] -->|"drift detected"| TRIG["POST Airflow REST API"]
-    TRIG -.->|"retrain"| TR
+    REG -->|"champion alias, read at pod start"| API
+    EVD -->|"drift metrics"| PUSH
 ```
 
 ## Tech stack
@@ -43,10 +46,10 @@ flowchart TB
 | --- | --- |
 | Orchestration | Apache Airflow 3.x (Docker Compose) |
 | Data & pipeline versioning | DVC — MinIO locally, S3 in cloud |
-| Experiment tracking & registry | MLflow (Postgres backend, server-proxied artifacts) |
+| Experiment tracking & registry | MLflow (Postgres backend; artifact uploads proxied, downloads presigned) |
 | Serving | FastAPI container on k3d Kubernetes (Helm) |
 | Infrastructure as code | Terraform — S3, ECR, least-privilege IAM |
-| CI/CD | GitHub Actions — lint, test, buildx, push to ECR |
+| CI/CD | GitHub Actions — lint, test, multi-arch build, push to GHCR; release tags copy to ECR |
 | Monitoring | Evidently (drift) + Prometheus / Grafana (API telemetry) |
 | GitOps (planned) | ArgoCD sync into k3d |
 
@@ -56,13 +59,14 @@ flowchart TB
   footprint is limited to S3, ECR, and a one-off ECS Fargate demo. MinIO speaks the S3
   API, so the storage code path is identical locally and in the cloud — switching is an
   endpoint and credentials, not a rewrite.
-- **Kubernetes over managed container services.** Serving runs on k3d with real
-  Deployment/Service/HPA manifests and a Helm chart — portable skills and
-  production-shaped configuration instead of a proprietary abstraction.
+- **Kubernetes over managed container services.** Serving runs on k3d from a Helm chart
+  (Deployment, Service, Ingress, ConfigMap) — portable skills and production-shaped
+  configuration instead of a proprietary abstraction.
 - **MLflow on Postgres, not SQLite.** Parallel Airflow tasks write concurrently;
   SQLite locks, Postgres doesn't.
-- **Server-proxied artifacts.** Clients log to MLflow without holding any storage
-  credentials — the server brokers all artifact traffic.
+- **Server-proxied artifact uploads.** Clients log to MLflow without holding any storage
+  credentials — uploads stream through the server. Downloads do not: MLflow 3 answers
+  them with a presigned MinIO URL, which decides how serving reaches the bucket (below).
 - **Lightweight model on purpose.** Fast training keeps the feedback loop on the
   pipeline, where the engineering value is.
 - **DVC for versioning, not orchestration.** DVC's pipeline feature (`dvc repro`) overlaps
@@ -302,9 +306,11 @@ would be burned on first use.
 
 ### Trigger the training DAG over the REST API
 
-This is the exact mechanism Phase 5's drift loop will use: mint a JWT from the auth
-endpoint, POST a run. The simple auth manager regenerates the admin password on every
-api-server start and the file lives inside the container, so fetch it there:
+This is the external, manual interface. Phase 5's drift loop does not use it: it starts
+the same DAG from inside Airflow with `TriggerDagRunOperator`, so it needs no credential.
+An external caller does — mint a JWT from the auth endpoint, POST a run. The simple auth
+manager regenerates the admin password on every api-server start and the file lives
+inside the container, so fetch it there:
 
 ```bash
 PASS=$(docker compose exec -T airflow-apiserver python -c \
@@ -326,6 +332,7 @@ curl -s -X POST http://localhost:8080/api/v2/dags/train_and_promote/dagRuns \
 ```
 ├── .github/workflows/   # CI, GHCR release, ECR release
 ├── charts/model-serving/ # the Helm chart -- the only definition of the deployment
+├── charts/monitoring/   # Prometheus/Grafana values, dashboard JSON, Pushgateway ingress
 ├── dags/                # Airflow DAGs
 ├── data/                # DVC-tracked datasets (pointers in git, bytes in the remote)
 ├── k3d/                 # committed cluster config + the M2 artifact probe
@@ -334,9 +341,8 @@ curl -s -X POST http://localhost:8080/api/v2/dags/train_and_promote/dagRuns \
 ├── src/mlops_pipeline/  # shared Python package
 ├── docker/              # service images and init scripts
 ├── infra/terraform/     # AWS resources (S3, ECR, IAM + GitHub OIDC)
-├── scripts/             # smoke tests, signature export, drift check
+├── scripts/             # smoke tests, signature export and parity, requirements-drift check
 ├── tests/
-├── docs/                # phase specs
 ├── Makefile             # the local workflow; `make help` lists it
 └── docker-compose.yml
 ```
@@ -357,8 +363,6 @@ Each gap is tracked and closed (or documented) in Phase 6:
   (`use_lockfile = true`), one state file per environment.
 - Bucket encryption is SSE-S3; regulated workloads use customer-managed KMS keys for
   rotation, per-key policies, and CloudTrail on key usage.
-- The CI role trusts any ref in the repository; tightening the `sub` condition to
-  `refs/heads/main` blocks fork-PR access.
 - Alerting: a failed DAG run only turns red in a UI nobody watches → wire
   `on_failure_callback` to Slack/PagerDuty and define per-task SLAs.
 - Serving's in-cluster DNS leans on Docker Desktop's resolver: CoreDNS runs with
@@ -366,9 +370,9 @@ Each gap is tracked and closed (or documented) in Phase 6:
   which on this machine is `192.168.65.254` and resolves `minio` and `mlflow` to their live
   container IPs — measured. On Linux Docker that upstream is expected to be the
   network-local `127.0.0.11`, which a CoreDNS *pod* would not be able to reach, so a Linux
-  CI runner would need the CoreDNS `NodeHosts` fallback (mechanism A′ in
-  `docs/phase-3-serving-spec.md`). **That Linux behaviour is reasoned, not tested** — no
-  Linux host has been tried, and it should be confirmed before Phase 4 depends on it.
+  host would need a CoreDNS `NodeHosts` fallback. **That Linux behaviour is reasoned, not
+  tested** — no Linux host has been tried. Phase 4 never came to depend on it, since CI
+  does not touch a cluster, but it should be confirmed before the cluster runs on Linux.
   Production replaces the whole question with a real object-store endpoint and DNS.
 - A stopped-and-restarted k3d cluster comes back with CoreDNS holding stale state
   (measured: `NXDOMAIN` even for `kubernetes.default`). `make cluster-up` and
@@ -386,12 +390,15 @@ Each gap is tracked and closed (or documented) in Phase 6:
   a rollout — but Traefik still returns a handful of 502s at cutover while endpoint
   removal propagates. Measured over three rollouts: 2–3 failed requests each, ~0.5% of
   samples polled at 200 ms. The fix is `replicas: 2` plus a `preStop` sleep so the
-  terminating pod keeps serving until it leaves rotation; deferred to Phase 4.
+  terminating pod keeps serving until it leaves rotation. Still open: the chart ships
+  `replicaCount: 1` with no `preStop` hook, so it carries into Phase 6.
 - The serving pod runs non-root with all capabilities dropped, but
   `readOnlyRootFilesystem` is off: MLflow downloads the model into a cache under `$HOME`
   at startup. Closing it needs `emptyDir` mounts for `$HOME` and `/tmp`.
 - The ingress is unauthenticated plain HTTP and the Deployment is a single replica — no
-  TLS, no auth, no HA. Acceptable on a local k3d cluster, not in production.
+  TLS, no auth, no HA, and no autoscaling: the chart has no HPA, and the k3d config
+  disables metrics-server, which one would need. Acceptable on a local k3d cluster, not in
+  production.
 - The serving image is ~1.4 GB, dominated by mlflow + scipy + scikit-learn pulled in by the
   model's logged requirements. Production trims this with `mlflow-skinny` plus only the
   flavor's runtime, or a purpose-built model server.
