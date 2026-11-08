@@ -177,7 +177,7 @@ configuration is at fault.
 | 2 | Preprocess/train DAGs, MLflow tracking, model registry | ✅ complete |
 | 3 | FastAPI serving on k3d, multi-stage Docker build, tests | ✅ complete |
 | 4 | CI/CD with GitHub Actions | ✅ complete |
-| 5 | Drift detection + automated retraining loop | 🔨 in progress |
+| 5 | Drift detection + automated retraining loop | 🔨 in progress — 3 of 4 milestones done |
 | 6 | Hardening: secrets, IAM, security checklist, cost audit | planned |
 | 7 | ArgoCD GitOps | planned |
 
@@ -304,6 +304,76 @@ takes an explicit `tag` input, since `github.ref_name` on a dispatch from `main`
 literally `"main"` — not a version — and the ECR repository is `IMMUTABLE`, so that name
 would be burned on first use.
 
+### Monitoring and drift (Phase 5, in progress)
+
+Three of the four milestones are on `main`: the monitoring stack, drift measured on real
+data, and a retraining trigger whose gate judges champion and candidate on the same rows.
+The fourth — serving picking up a new champion without a restart — is not built yet. The
+pod resolves `@champion` once at startup, so a promotion reaches serving only through a
+restart:
+
+```bash
+kubectl -n serving rollout restart deployment/model-serving
+```
+
+`helm upgrade` would not do it: the pod template changes only when the image tag or the
+ConfigMap does, and the ConfigMap holds the alias, not a version.
+
+```bash
+make monitoring-up      # Prometheus + Pushgateway + Grafana in k3d, dashboards from the repo
+make monitoring-reach   # prove Airflow -> Pushgateway: push, read back, delete
+make monitoring-down
+```
+
+Grafana at http://grafana.localhost:8081 (admin/admin) · Pushgateway at
+http://pushgateway.localhost:8081. The provisioned dashboard puts request rate and latency
+next to which model is loaded (`model_info{name,version,run_id}`), the predicted-duration
+distribution, and batch drift share by month, so a model change is a visible event rather
+than something found in pod logs.
+
+**The drift DAG.** `drift_and_retrain` compares a month against the champion's own
+training sample — found through the champion run's tags, so the reference moves with a
+promotion — logs the Evidently report to MLflow, pushes the scores to Pushgateway, and,
+when the decision is to retrain, starts `train_and_promote` from inside Airflow with
+`TriggerDagRunOperator`. All three DAGs take `month` from the run config. Before a month
+can be measured, `ingest_taxi_data` must have run for it (it writes the 200k sample that
+training and the gate read), and its raw parquet must be in `data/raw/`, which
+`uv run dvc pull` fills. Then trigger `drift_and_retrain` with:
+
+```json
+{"month": "2023-12", "force_retrain": false}
+```
+
+Four months are DVC-tracked: 2023-01 (the training baseline), 2023-02, 2023-07, and
+2023-12.
+
+**What the data showed.** Champion v4, trained on 2023-01, against each month:
+
+| Month | drift_share | Champion MAE (min) | Mean-baseline MAE (min) |
+| --- | --- | --- | --- |
+| 2023-01 | reference | 3.46 | 7.81 |
+| 2023-02 | 0.000 | 3.31 | 7.94 |
+| 2023-07 | 0.000 | 4.25 | 9.24 |
+| 2023-12 | 0.167 | 4.58 | 9.84 |
+
+No month reaches Evidently's dataset-level threshold (`drift_share >= 0.5`), and the
+threshold stays where it is rather than being lowered until something fires. Champion MAE
+does rise, but the baseline — which refits on each month — rises almost as much: about 81%
+of the increase is the months getting harder for any model, not the champion going stale.
+A raw-MAE trigger would have fired on July and December for that reason alone.
+`force_retrain` exists so the loop can be demonstrated without editing the policy.
+
+The first drift run reported zero drift for every month, and it was wrong: the parser
+matched on `metric_id`, which Evidently 0.7 leaves empty. `drift.compute` now raises when
+it finds no per-column scores, because a monitor that matched nothing must not be able to
+report "no drift".
+
+**The loop has run end to end once, forced, on 2023-12.** The candidate trained on
+December scored MAE 4.90 against the champion's 4.58 on December's own holdout and was
+rejected (−7.06%, against a 1% improvement bar), so v4 is still champion. The gate
+refusing a worse model is the gate working, but it means a prediction-visible promotion is
+still to come.
+
 ### Trigger the training DAG over the REST API
 
 This is the external, manual interface. Phase 5's drift loop does not use it: it starts
@@ -402,3 +472,13 @@ Each gap is tracked and closed (or documented) in Phase 6:
 - The serving image is ~1.4 GB, dominated by mlflow + scipy + scikit-learn pulled in by the
   model's logged requirements. Production trims this with `mlflow-skinny` plus only the
   flavor's runtime, or a purpose-built model server.
+- Grafana runs with the default `admin`/`admin`, and the Pushgateway ingress accepts
+  unauthenticated pushes. Acceptable on a local cluster; production puts both behind auth.
+- Promotion is automatic: a candidate that clears the 1% bar moves `@champion` with no
+  human approval or shadow evaluation. Production adds an approval step before the alias
+  moves.
+- Pushgateway keeps series until they are deleted. Drift metrics are grouped by month, so a
+  re-run overwrites its own slot, but `pushgateway.delete_month` exists and nothing calls it
+  yet — a month that is never re-run stays on the dashboard looking current.
+- Drift on a public historical dataset is a rehearsal: labels arrive with the data here,
+  where a real deployment waits for ground truth, or never gets it.
